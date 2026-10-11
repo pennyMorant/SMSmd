@@ -1,0 +1,4 @@
+-keep class org.eclipse.angus.mail.** { *; }
+-keep class jakarta.mail.** { *; }
+-dontwarn org.eclipse.angus.mail.**
+-dontwarn jakarta.activation.**
