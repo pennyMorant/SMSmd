@@ -46,6 +46,17 @@ Configure these repository secrets before the first release:
 
 Each GitHub Release includes the APK, AAB, and a `SHA256SUMS` file.
 
+## Developer verification
+
+Register the app with Android Developer Console or Google Play Console before
+public sideload distribution:
+
+- Package name: `io.github.pennymorant.smsmd`
+- Signing certificate SHA-256: `EE:78:31:27:40:53:83:BF:DF:3F:B8:35:0A:55:41:2D:A7:CD:F9:2D:9B:7C:B1:3C:59:B2:3E:E4:2A:B2:60:49`
+
+Keep using the same release signing key for every update. Changing the key will
+break the package registration and prevent installed copies from updating.
+
 ## Setup
 
 1. Open Settings and tap the add button.

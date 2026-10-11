@@ -20,11 +20,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.smsmd"
+    namespace = "io.github.pennymorant.smsmd"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.example.smsmd"
+        applicationId = "io.github.pennymorant.smsmd"
         minSdk = 33
         targetSdk = 37
         versionCode = releaseVersionCode
