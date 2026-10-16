@@ -15,6 +15,7 @@ A small native Android app that forwards incoming SMS messages through a selecte
 - Classifies authentication, certificate, and permanent SMTP failures
 - Shows only the most recent delivery result
 - Optional failure notifications with a dedicated Android channel
+- In-app request to allow reliable background operation outside battery optimization
 - Encrypts SMTP passwords, queued senders, and message bodies with Android Keystore AES-GCM
 - Removes message content from the local queue after final success or failure
 

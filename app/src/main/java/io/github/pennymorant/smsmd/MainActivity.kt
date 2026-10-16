@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.PowerManager
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -104,6 +105,7 @@ class MainActivity : ComponentActivity() {
     }
     private var hasSmsPermission by mutableStateOf(false)
     private var hasNotificationPermission by mutableStateOf(false)
+    private var hasBackgroundAccess by mutableStateOf(false)
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -138,11 +140,25 @@ class MainActivity : ComponentActivity() {
                     viewModel = viewModel,
                     hasSmsPermission = hasSmsPermission,
                     hasNotificationPermission = hasNotificationPermission,
+                    hasBackgroundAccess = hasBackgroundAccess,
                     requestSmsPermission = {
                         smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
                     },
                     requestNotificationPermission = {
                         notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    },
+                    changeBackgroundAccess = { enabled ->
+                        val action = if (enabled) {
+                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS
+                        } else {
+                            Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS
+                        }
+                        val intent = Intent(action).apply {
+                            if (enabled) data = Uri.parse("package:$packageName")
+                        }
+                        runCatching { startActivity(intent) }.onFailure {
+                            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        }
                     },
                     openSystemSettings = {
                         startActivity(
@@ -171,6 +187,8 @@ class MainActivity : ComponentActivity() {
             this,
             Manifest.permission.POST_NOTIFICATIONS,
         ) == PackageManager.PERMISSION_GRANTED
+        hasBackgroundAccess = getSystemService(PowerManager::class.java)
+            .isIgnoringBatteryOptimizations(packageName)
     }
 }
 
@@ -194,8 +212,10 @@ private fun SmsMdApp(
     viewModel: MainViewModel,
     hasSmsPermission: Boolean,
     hasNotificationPermission: Boolean,
+    hasBackgroundAccess: Boolean,
     requestSmsPermission: () -> Unit,
     requestNotificationPermission: () -> Unit,
+    changeBackgroundAccess: (Boolean) -> Unit,
     openSystemSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
@@ -267,6 +287,7 @@ private fun SmsMdApp(
                     state = state,
                     hasSmsPermission = hasSmsPermission,
                     hasNotificationPermission = hasNotificationPermission,
+                    hasBackgroundAccess = hasBackgroundAccess,
                     setEnabled = { enabled ->
                         if (enabled && !hasSmsPermission) {
                             selectedTab = AppTab.SETTINGS
@@ -280,6 +301,7 @@ private fun SmsMdApp(
                     state = state,
                     hasSmsPermission = hasSmsPermission,
                     hasNotificationPermission = hasNotificationPermission,
+                    hasBackgroundAccess = hasBackgroundAccess,
                     changeSmsPermission = { enabled ->
                         if (enabled) showSmsDisclosure = true else openSystemSettings()
                     },
@@ -287,6 +309,7 @@ private fun SmsMdApp(
                         if (enabled && !hasNotificationPermission) requestNotificationPermission()
                         else viewModel.setFailureNotifications(enabled)
                     },
+                    changeBackgroundAccess = changeBackgroundAccess,
                     changeTheme = viewModel::setThemeMode,
                     editProfile = { profile ->
                         viewModel.loadSmtpPassword(profile.id) { password ->
@@ -322,6 +345,7 @@ private fun HomeScreen(
     state: MainUiState,
     hasSmsPermission: Boolean,
     hasNotificationPermission: Boolean,
+    hasBackgroundAccess: Boolean,
     setEnabled: (Boolean) -> Unit,
 ) {
     LazyColumn(
@@ -349,7 +373,7 @@ private fun HomeScreen(
             )
         }
         item {
-            val ready = hasSmsPermission && hasNotificationPermission
+            val ready = hasSmsPermission && hasNotificationPermission && hasBackgroundAccess
             SummaryCard("Permissions", trailing = {
                 StatusPill(if (ready) "Ready" else "Not ready", if (ready) StatusTone.SUCCESS else StatusTone.WARNING)
             })
@@ -425,8 +449,10 @@ private fun SettingsScreen(
     state: MainUiState,
     hasSmsPermission: Boolean,
     hasNotificationPermission: Boolean,
+    hasBackgroundAccess: Boolean,
     changeSmsPermission: (Boolean) -> Unit,
     changeNotifications: (Boolean) -> Unit,
+    changeBackgroundAccess: (Boolean) -> Unit,
     changeTheme: (ThemeMode) -> Unit,
     editProfile: (SmtpProfile) -> Unit,
     selectProfile: (SmtpProfile) -> Unit,
@@ -474,6 +500,13 @@ private fun SettingsScreen(
                         detail = "Notify when delivery fails",
                         granted = hasNotificationPermission && state.settings.failureNotifications,
                         onCheckedChange = changeNotifications,
+                    )
+                    HorizontalDivider()
+                    PermissionRow(
+                        title = "Background operation",
+                        detail = "Allow reliable forwarding while the app is closed",
+                        granted = hasBackgroundAccess,
+                        onCheckedChange = changeBackgroundAccess,
                     )
                 }
             }
