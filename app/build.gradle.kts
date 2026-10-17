@@ -60,7 +60,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlin { compilerOptions { jvmTarget = JvmTarget.JVM_17 } }
-    buildFeatures { compose = true }
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
     packaging.resources.excludes += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md")
 }
 
