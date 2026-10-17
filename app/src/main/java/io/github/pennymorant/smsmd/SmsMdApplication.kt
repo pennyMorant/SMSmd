@@ -10,6 +10,8 @@ import io.github.pennymorant.smsmd.core.mail.SmtpClient
 import io.github.pennymorant.smsmd.core.notification.FailureNotifier
 import io.github.pennymorant.smsmd.core.settings.SettingsRepository
 import io.github.pennymorant.smsmd.forwarding.ForwardRepository
+import io.github.pennymorant.smsmd.update.AppUpdateRepository
+import io.github.pennymorant.smsmd.update.UpdateNotifier
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -22,6 +24,7 @@ class SmsMdApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         container.failureNotifier.createChannel()
+        container.updateNotifier.createChannel()
         applicationScope.launch {
             container.database.forwardDao().trimLogsToLatest()
             container.database.forwardDao().deleteFailedJobs()
@@ -38,6 +41,8 @@ class AppContainer(application: Application) {
         .build()
     val smtpClient = SmtpClient()
     val failureNotifier = FailureNotifier(application)
+    val updateRepository = AppUpdateRepository(application)
+    val updateNotifier = UpdateNotifier(application)
     val forwardRepository = ForwardRepository(
         application,
         database.forwardDao(),
