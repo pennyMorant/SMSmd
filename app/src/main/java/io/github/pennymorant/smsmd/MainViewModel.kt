@@ -10,6 +10,9 @@ import io.github.pennymorant.smsmd.core.settings.AppSettings
 import io.github.pennymorant.smsmd.core.settings.DEFAULT_PROFILE_ID
 import io.github.pennymorant.smsmd.core.settings.SmtpProfile
 import io.github.pennymorant.smsmd.core.settings.ThemeMode
+import io.github.pennymorant.smsmd.core.settings.telegramReady
+import io.github.pennymorant.smsmd.core.telegram.TelegramChat
+import io.github.pennymorant.smsmd.core.telegram.TelegramClient
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,9 +25,16 @@ import kotlinx.coroutines.withContext
 
 enum class SmtpTestPhase { IDLE, TESTING, SUCCESS, FAILED }
 
+enum class TelegramTestPhase { IDLE, TESTING, SUCCESS, FAILED }
+
 data class SmtpTestStatus(
     val profileId: String? = null,
     val phase: SmtpTestPhase = SmtpTestPhase.IDLE,
+    val message: String = "",
+)
+
+data class TelegramTestStatus(
+    val phase: TelegramTestPhase = TelegramTestPhase.IDLE,
     val message: String = "",
 )
 
@@ -34,6 +44,7 @@ data class MainUiState(
     val pendingCount: Int = 0,
     val lastDelivery: DeliveryLogEntity? = null,
     val testStatus: SmtpTestStatus = SmtpTestStatus(),
+    val telegramTestStatus: TelegramTestStatus = TelegramTestStatus(),
 ) {
     val activeProfile: SmtpProfile?
         get() = profiles.firstOrNull { it.id == settings.activeProfileId }
@@ -41,8 +52,9 @@ data class MainUiState(
 
 class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val testStatus = MutableStateFlow(SmtpTestStatus())
+    private val telegramTestStatus = MutableStateFlow(TelegramTestStatus())
 
-    val uiState: StateFlow<MainUiState> = combine(
+    private val baseUiState = combine(
         container.settings.settings,
         container.settings.profiles,
         container.database.forwardDao().pendingCount(),
@@ -50,6 +62,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         testStatus,
     ) { settings, profiles, pending, lastDelivery, currentTest ->
         MainUiState(settings, profiles, pending, lastDelivery, currentTest)
+    }
+
+    val uiState: StateFlow<MainUiState> = combine(baseUiState, telegramTestStatus) { state, telegramTest ->
+        state.copy(telegramTestStatus = telegramTest)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
 
     fun saveProfile(
@@ -125,16 +141,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             val profile = uiState.value.activeProfile
             if (enabled) {
-                if (profile == null) {
-                    callback("Select an SMTP profile first")
-                    return@launch
-                }
-                if (!profile.smtpVerified) {
-                    callback("Test the active SMTP profile first")
-                    return@launch
-                }
-                if (!container.secrets.hasSmtpPassword(profile.id)) {
-                    callback("The active profile has no saved app password")
+                val smtpReady = profile?.smtpVerified == true && container.secrets.hasSmtpPassword(profile.id)
+                val telegramReady = uiState.value.settings.telegramReady && container.secrets.hasTelegramToken()
+                if (!smtpReady && !telegramReady) {
+                    callback("Test an SMTP or Telegram configuration first")
                     return@launch
                 }
             }
@@ -156,6 +166,76 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun loadTelegramToken(callback: (String) -> Unit) {
+        viewModelScope.launch {
+            callback(withContext(Dispatchers.IO) { container.secrets.telegramToken() })
+        }
+    }
+
+    fun saveTelegram(
+        enabled: Boolean,
+        token: String,
+        chatId: String,
+        callback: (success: Boolean, message: String) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val startedAt = SystemClock.elapsedRealtime()
+            val result = runCatching {
+                if (enabled) validateTelegram(token, chatId)
+                val settings = uiState.value.settings
+                val savedToken = container.secrets.telegramToken()
+                val tokenChanged = token.trim() != savedToken
+                val chatChanged = chatId.trim() != settings.telegramChatId
+                if (tokenChanged) {
+                    if (token.isBlank()) container.secrets.deleteTelegramToken()
+                    else container.secrets.saveTelegramToken(token.trim())
+                }
+                container.settings.saveTelegram(
+                    enabled = enabled,
+                    chatId = chatId,
+                    verified = settings.telegramVerified && !tokenChanged && !chatChanged,
+                )
+            }
+            delay((MIN_SAVE_ANIMATION_MS - (SystemClock.elapsedRealtime() - startedAt)).coerceAtLeast(0L))
+            result.onSuccess { callback(true, "Telegram saved") }
+                .onFailure { callback(false, it.message ?: "Could not save Telegram") }
+        }
+    }
+
+    fun testTelegram(enabled: Boolean, token: String, chatId: String, callback: (String) -> Unit) {
+        viewModelScope.launch {
+            telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.TESTING)
+            val result = runCatching {
+                validateTelegram(token, chatId)
+                container.secrets.saveTelegramToken(token.trim())
+                container.settings.saveTelegram(enabled, chatId, verified = false)
+                withContext(Dispatchers.IO) {
+                    container.telegramClient.sendTest(token.trim(), chatId.trim())
+                }
+                container.settings.saveTelegram(enabled, chatId, verified = true)
+            }
+            result.onSuccess {
+                telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.SUCCESS, "Verified")
+                callback("Telegram test sent")
+            }.onFailure { error ->
+                val message = TelegramClient.safeError(error)
+                telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.FAILED, message)
+                callback(message)
+            }
+        }
+    }
+
+    fun detectTelegramChats(token: String, callback: (Result<List<TelegramChat>>) -> Unit) {
+        viewModelScope.launch {
+            val result = runCatching {
+                require(token.isNotBlank()) { "Bot token is required" }
+                withContext(Dispatchers.IO) { container.telegramClient.recentChats(token.trim()) }
+                    .also { require(it.isNotEmpty()) { "No chats found. Send /start to the bot first" } }
+            }
+            callback(result)
+        }
+    }
+
     private suspend fun persistSynthesizedDefaultBefore(profile: SmtpProfile) {
         val current = uiState.value.profiles
         if (profile.id != DEFAULT_PROFILE_ID && current.size == 1 && current.first().id == DEFAULT_PROFILE_ID) {
@@ -168,6 +248,11 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         require(profile.smtpHost.isNotBlank()) { "SMTP host is required" }
         require(profile.smtpPort in 1..65535) { "Port must be between 1 and 65535" }
         if (requireCredentials) require(profile.isConfigured) { "Complete all SMTP fields first" }
+    }
+
+    private fun validateTelegram(token: String, chatId: String) {
+        require(token.isNotBlank()) { "Bot token is required" }
+        require(chatId.isNotBlank()) { "Chat ID is required" }
     }
 
     private fun SmtpProfile.sameConnection(other: SmtpProfile): Boolean =

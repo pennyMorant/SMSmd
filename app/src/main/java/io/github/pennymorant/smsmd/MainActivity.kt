@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
@@ -39,6 +40,7 @@ import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Save
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -94,7 +96,10 @@ import io.github.pennymorant.smsmd.core.settings.SmtpProfile
 import io.github.pennymorant.smsmd.core.settings.SmtpProvider
 import io.github.pennymorant.smsmd.core.settings.SmtpSecurity
 import io.github.pennymorant.smsmd.core.settings.ThemeMode
+import io.github.pennymorant.smsmd.core.settings.AppSettings
 import io.github.pennymorant.smsmd.core.settings.defaults
+import io.github.pennymorant.smsmd.core.telegram.TelegramChat
+import io.github.pennymorant.smsmd.core.telegram.TelegramClient
 import io.github.pennymorant.smsmd.update.AppUpdateState
 import io.github.pennymorant.smsmd.update.AppUpdateViewModel
 import io.github.pennymorant.smsmd.ui.theme.SmsMdTheme
@@ -410,6 +415,12 @@ private fun SmsMdApp(
                     },
                     selectProfile = { viewModel.selectProfile(it, showMessage) },
                     deleteProfile = { viewModel.deleteProfile(it, showMessage) },
+                    loadTelegramToken = viewModel::loadTelegramToken,
+                    saveTelegram = viewModel::saveTelegram,
+                    testTelegram = { enabled, token, chatId ->
+                        viewModel.testTelegram(enabled, token, chatId, showMessage)
+                    },
+                    detectTelegramChats = viewModel::detectTelegramChats,
                     checkForUpdate = checkForUpdate,
                     installUpdate = installUpdate,
                 )
@@ -450,7 +461,7 @@ private fun HomeScreen(
         item {
             Text("SMSmd", style = MaterialTheme.typography.headlineMedium)
             Text(
-                "Forward incoming messages through the active SMTP profile.",
+                "Forward incoming messages through email or Telegram.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -484,22 +495,40 @@ private fun HomeScreen(
             )
         }
         item {
+            val enabled = state.settings.telegramEnabled
+            val ready = enabled && state.settings.telegramVerified
+            SummaryCard(
+                title = "Telegram",
+                detail = if (enabled) state.settings.telegramChatId.ifBlank { "No chat selected" } else "Disabled",
+                trailing = {
+                    StatusPill(
+                        text = if (!enabled) "Off" else if (ready) "Ready" else "Not ready",
+                        tone = if (!enabled) StatusTone.NEUTRAL else if (ready) StatusTone.SUCCESS else StatusTone.WARNING,
+                    )
+                },
+            )
+        }
+        item {
             val last = state.lastDelivery
             val sent = last?.result == "SENT"
             SummaryCard(
                 title = "Last delivery",
-                detail = last?.let { DateFormat.getDateTimeInstance().format(Date(it.completedAt)) }
+                detail = last?.let {
+                    "${it.channelSummary}\n${DateFormat.getDateTimeInstance().format(Date(it.completedAt))}"
+                }
                     ?: "No delivery yet",
                 trailing = {
                     StatusPill(
                         text = when {
                             last == null -> "None"
                             sent -> "Sent"
+                            last.result == "PARTIAL" -> "Partial"
                             else -> "Failed"
                         },
                         tone = when {
                             last == null -> StatusTone.NEUTRAL
                             sent -> StatusTone.SUCCESS
+                            last.result == "PARTIAL" -> StatusTone.WARNING
                             else -> StatusTone.ERROR
                         },
                     )
@@ -554,6 +583,10 @@ private fun SettingsScreen(
     editProfile: (SmtpProfile) -> Unit,
     selectProfile: (SmtpProfile) -> Unit,
     deleteProfile: (SmtpProfile) -> Unit,
+    loadTelegramToken: ((String) -> Unit) -> Unit,
+    saveTelegram: (Boolean, String, String, (Boolean, String) -> Unit) -> Unit,
+    testTelegram: (Boolean, String, String) -> Unit,
+    detectTelegramChats: (String, (Result<List<TelegramChat>>) -> Unit) -> Unit,
     checkForUpdate: () -> Unit,
     installUpdate: () -> Unit,
 ) {
@@ -581,6 +614,16 @@ private fun SettingsScreen(
                     }
                 }
             }
+        }
+        item {
+            TelegramCard(
+                settings = state.settings,
+                testStatus = state.telegramTestStatus,
+                loadToken = loadTelegramToken,
+                save = saveTelegram,
+                test = testTelegram,
+                detectChats = detectTelegramChats,
+            )
         }
         item {
             AppUpdateCard(
@@ -637,6 +680,184 @@ private fun SettingsScreen(
                 edit = { editProfile(profile) },
                 delete = { deleteProfile(profile) },
             )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TelegramCard(
+    settings: AppSettings,
+    testStatus: TelegramTestStatus,
+    loadToken: ((String) -> Unit) -> Unit,
+    save: (Boolean, String, String, (Boolean, String) -> Unit) -> Unit,
+    test: (Boolean, String, String) -> Unit,
+    detectChats: (String, (Result<List<TelegramChat>>) -> Unit) -> Unit,
+) {
+    var enabled by rememberSaveable { mutableStateOf(settings.telegramEnabled) }
+    var token by rememberSaveable { mutableStateOf("") }
+    var chatId by rememberSaveable { mutableStateOf(settings.telegramChatId) }
+    var savePhase by rememberSaveable { mutableStateOf(ProfileSavePhase.IDLE) }
+    var saveError by rememberSaveable { mutableStateOf("") }
+    var dirty by rememberSaveable { mutableStateOf(false) }
+    var detecting by rememberSaveable { mutableStateOf(false) }
+    var detectError by rememberSaveable { mutableStateOf("") }
+    var detectedChats by remember { mutableStateOf<List<TelegramChat>>(emptyList()) }
+    var showChats by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) { loadToken { token = it } }
+    LaunchedEffect(testStatus.phase) {
+        if (testStatus.phase == TelegramTestPhase.SUCCESS) dirty = false
+    }
+
+    if (showChats) {
+        ModalBottomSheet(
+            onDismissRequest = { showChats = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("Select Telegram chat", style = MaterialTheme.typography.headlineSmall)
+                Spacer(Modifier.height(8.dp))
+                detectedChats.forEach { chat ->
+                    TextButton(
+                        onClick = {
+                            chatId = chat.id
+                            dirty = true
+                            showChats = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Column(Modifier.fillMaxWidth()) {
+                            Text(chat.title, style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "${chat.type} · ${chat.id}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Telegram Bot", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        if (enabled) "Forwarding channel enabled" else "Forwarding channel disabled",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                val verified = settings.telegramVerified && !dirty
+                StatusPill(
+                    text = when {
+                        testStatus.phase == TelegramTestPhase.TESTING -> "Testing"
+                        !enabled -> "Off"
+                        testStatus.phase == TelegramTestPhase.FAILED -> "Failed"
+                        verified -> "Ready"
+                        else -> "Required"
+                    },
+                    tone = when {
+                        testStatus.phase == TelegramTestPhase.TESTING -> StatusTone.INFO
+                        !enabled -> StatusTone.NEUTRAL
+                        testStatus.phase == TelegramTestPhase.FAILED -> StatusTone.ERROR
+                        verified -> StatusTone.SUCCESS
+                        else -> StatusTone.WARNING
+                    },
+                )
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        dirty = true
+                    },
+                )
+            }
+            OutlinedTextField(
+                value = token,
+                onValueChange = {
+                    token = it
+                    dirty = true
+                },
+                label = { Text("Bot token") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedTextField(
+                value = chatId,
+                onValueChange = {
+                    chatId = it
+                    dirty = true
+                },
+                label = { Text("Chat ID") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            OutlinedButton(
+                onClick = {
+                    detecting = true
+                    detectError = ""
+                    detectChats(token) { result ->
+                        detecting = false
+                        result.onSuccess {
+                            detectedChats = it
+                            showChats = true
+                        }.onFailure { detectError = TelegramClient.safeError(it) }
+                    }
+                },
+                enabled = !detecting && testStatus.phase != TelegramTestPhase.TESTING,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (detecting) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Outlined.Sync, contentDescription = null)
+                }
+                Spacer(Modifier.size(8.dp))
+                Text(if (detecting) "Detecting" else "Detect chat")
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(
+                    onClick = {
+                        savePhase = ProfileSavePhase.SAVING
+                        saveError = ""
+                        save(enabled, token, chatId) { success, message ->
+                            savePhase = if (success) ProfileSavePhase.SUCCESS else ProfileSavePhase.FAILED
+                            if (success) dirty = false
+                            else saveError = message
+                        }
+                    },
+                    modifier = Modifier.weight(1f),
+                    enabled = savePhase != ProfileSavePhase.SAVING &&
+                        testStatus.phase != TelegramTestPhase.TESTING,
+                ) { SaveButtonContent(savePhase) }
+                Button(
+                    onClick = { test(enabled, token, chatId) },
+                    modifier = Modifier.weight(1f),
+                    enabled = savePhase != ProfileSavePhase.SAVING &&
+                        testStatus.phase != TelegramTestPhase.TESTING,
+                ) { TelegramTestButtonContent(testStatus.phase) }
+            }
+            if (detectError.isNotBlank()) {
+                Text(detectError, color = MaterialTheme.colorScheme.error)
+            }
+            if (saveError.isNotBlank()) {
+                Text(saveError, color = MaterialTheme.colorScheme.error)
+            }
+            if (testStatus.phase == TelegramTestPhase.FAILED && testStatus.message.isNotBlank()) {
+                Text(testStatus.message, color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }
@@ -806,6 +1027,28 @@ private fun TestButtonContent(phase: SmtpTestPhase) {
                     SmtpTestPhase.TESTING -> "Testing"
                     SmtpTestPhase.SUCCESS -> "Verified"
                     SmtpTestPhase.FAILED -> "Retry"
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun TelegramTestButtonContent(phase: TelegramTestPhase) {
+    AnimatedContent(targetState = phase, label = "Telegram test status") { current ->
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            when (current) {
+                TelegramTestPhase.IDLE -> Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null)
+                TelegramTestPhase.TESTING -> CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                TelegramTestPhase.SUCCESS -> Icon(Icons.Outlined.Check, contentDescription = null)
+                TelegramTestPhase.FAILED -> Icon(Icons.Outlined.ErrorOutline, contentDescription = null)
+            }
+            Text(
+                when (current) {
+                    TelegramTestPhase.IDLE -> "Test"
+                    TelegramTestPhase.TESTING -> "Testing"
+                    TelegramTestPhase.SUCCESS -> "Verified"
+                    TelegramTestPhase.FAILED -> "Retry"
                 },
             )
         }

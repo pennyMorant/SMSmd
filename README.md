@@ -1,6 +1,6 @@
 # SMSmd
 
-A small native Android app that forwards incoming SMS messages through a selected SMTP profile.
+A small native Android app that forwards incoming SMS messages through email, Telegram, or both.
 
 ## Features
 
@@ -10,6 +10,9 @@ A small native Android app that forwards incoming SMS messages through a selecte
 - Includes Gmail and Outlook SMTP provider presets plus custom SMTP
 - Supports multiple encrypted SMTP profiles with one active profile
 - Supports SMTP with required STARTTLS or implicit TLS
+- Sends the complete SMS through a Telegram Bot with a tested Bot Token and Chat ID
+- Detects recent Telegram chats after the user starts the bot
+- Tracks email and Telegram independently so retries do not duplicate a successful channel
 - Requires a successful test email before forwarding can be enabled
 - Persists delivery work and retries temporary network/SMTP failures
 - Classifies authentication, certificate, and permanent SMTP failures
@@ -17,7 +20,7 @@ A small native Android app that forwards incoming SMS messages through a selecte
 - Optional failure notifications with a dedicated Android channel
 - In-app request to allow reliable background operation outside battery optimization
 - Checks GitHub Releases in Settings, verifies the APK digest, package, version, and signing certificate, then offers installation
-- Encrypts SMTP passwords, queued senders, and message bodies with Android Keystore AES-GCM
+- Encrypts SMTP passwords, Telegram Bot tokens, queued senders, and message bodies with Android Keystore AES-GCM
 - Removes message content from the local queue after final success or failure
 
 ## Requirements
@@ -67,8 +70,14 @@ break the package registration and prevent installed copies from updating.
 4. Send a test email, then select the verified profile as active.
 5. Grant incoming SMS access in Settings and enable forwarding on the Home tab.
 
+Telegram can be enabled independently. Create a bot with BotFather, send `/start`
+to it, enter the Bot Token, detect or enter the Chat ID, and run the real send test.
+
 ## Privacy
 
-The app does not read SMS history or contacts. SMTP credentials and queued message content are encrypted with an Android Keystore-backed AES-GCM key. Message content is removed from the local queue after final delivery processing.
+The app does not read SMS history or contacts. SMTP credentials, Telegram Bot tokens,
+and queued message content are encrypted with an Android Keystore-backed AES-GCM key.
+Message content is removed from the local queue after final delivery processing.
+Telegram Bot chats are not end-to-end encrypted.
 
 SMS access is a restricted permission on Google Play and requires an approved core use case and permissions declaration before Play distribution.

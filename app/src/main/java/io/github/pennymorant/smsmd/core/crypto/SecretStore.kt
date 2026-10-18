@@ -25,9 +25,24 @@ class SecretStore(context: Context, private val crypto: CryptoManager) {
         preferences.edit { remove(passwordKey(profileId)) }
     }
 
+    fun saveTelegramToken(token: String) {
+        preferences.edit { putString(TELEGRAM_TOKEN_KEY, crypto.encrypt(token)) }
+    }
+
+    fun telegramToken(): String = runCatching {
+        crypto.decrypt(preferences.getString(TELEGRAM_TOKEN_KEY, null).orEmpty())
+    }.getOrDefault("")
+
+    fun hasTelegramToken(): Boolean = telegramToken().isNotBlank()
+
+    fun deleteTelegramToken() {
+        preferences.edit { remove(TELEGRAM_TOKEN_KEY) }
+    }
+
     private fun passwordKey(profileId: String) = "smtp_password_$profileId"
 
     private companion object {
         const val LEGACY_PASSWORD_KEY = "smtp_password"
+        const val TELEGRAM_TOKEN_KEY = "telegram_bot_token"
     }
 }

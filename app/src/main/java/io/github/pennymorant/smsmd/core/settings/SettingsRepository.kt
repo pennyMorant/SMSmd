@@ -21,6 +21,9 @@ class SettingsRepository(private val context: Context) {
             activeProfileId = values[Keys.activeProfileId] ?: DEFAULT_PROFILE_ID,
             failureNotifications = values[Keys.failureNotifications] ?: false,
             themeMode = enumValueOrDefault(values[Keys.themeMode], ThemeMode.SYSTEM),
+            telegramEnabled = values[Keys.telegramEnabled] ?: false,
+            telegramChatId = values[Keys.telegramChatId].orEmpty(),
+            telegramVerified = values[Keys.telegramVerified] ?: false,
         )
     }
 
@@ -85,6 +88,14 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.themeMode] = themeMode.name }
     }
 
+    suspend fun saveTelegram(enabled: Boolean, chatId: String, verified: Boolean) {
+        context.settingsDataStore.edit {
+            it[Keys.telegramEnabled] = enabled
+            it[Keys.telegramChatId] = chatId.trim()
+            it[Keys.telegramVerified] = verified
+        }
+    }
+
     private fun readProfile(values: Preferences, id: String): SmtpProfile {
         val provider = enumValueOrDefault(values[stringKey(id, "provider")], SmtpProvider.CUSTOM)
         val defaults = provider.defaults()
@@ -132,6 +143,9 @@ class SettingsRepository(private val context: Context) {
         val activeProfileId = stringPreferencesKey("active_profile_id")
         val profileIds = stringSetPreferencesKey("profile_ids")
         val profilesInitialized = booleanPreferencesKey("profiles_initialized")
+        val telegramEnabled = booleanPreferencesKey("telegram_enabled")
+        val telegramChatId = stringPreferencesKey("telegram_chat_id")
+        val telegramVerified = booleanPreferencesKey("telegram_verified")
         val legacyHost = stringPreferencesKey("smtp_host")
         val legacyPort = intPreferencesKey("smtp_port")
         val legacySecurity = stringPreferencesKey("smtp_security")

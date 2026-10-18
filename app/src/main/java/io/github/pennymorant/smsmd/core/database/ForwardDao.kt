@@ -17,6 +17,9 @@ interface ForwardDao {
     @Query("UPDATE forward_jobs SET state = :state, attemptCount = :attempts, lastError = :error WHERE id = :id")
     suspend fun updateJob(id: Long, state: String, attempts: Int, error: String? = null)
 
+    @Query("UPDATE forward_jobs SET smtpState = :smtpState, telegramState = :telegramState WHERE id = :id")
+    suspend fun updateChannelStates(id: Long, smtpState: String, telegramState: String)
+
     @Query("DELETE FROM forward_jobs WHERE id = :id")
     suspend fun deleteJob(id: Long)
 

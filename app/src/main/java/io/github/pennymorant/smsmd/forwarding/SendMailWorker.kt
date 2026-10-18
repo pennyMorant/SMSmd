@@ -4,15 +4,18 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import io.github.pennymorant.smsmd.SmsMdApplication
+import io.github.pennymorant.smsmd.core.database.ChannelState
 import io.github.pennymorant.smsmd.core.database.JobState
 import io.github.pennymorant.smsmd.core.mail.SmtpClient
+import io.github.pennymorant.smsmd.core.telegram.TelegramApiException
+import io.github.pennymorant.smsmd.core.telegram.TelegramClient
 import jakarta.mail.AuthenticationFailedException
 import jakarta.mail.SendFailedException
+import java.security.cert.CertificateException
+import javax.net.ssl.SSLHandshakeException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import java.security.cert.CertificateException
-import javax.net.ssl.SSLHandshakeException
 import org.eclipse.angus.mail.smtp.SMTPAddressFailedException
 import org.eclipse.angus.mail.smtp.SMTPSendFailedException
 
@@ -27,40 +30,96 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
             .getOrElse { return@withContext Result.failure() }
         val body = runCatching { container.crypto.decrypt(job.encryptedBody) }
             .getOrElse { return@withContext Result.failure() }
+        val errors = linkedSetOf<String>()
+        job.lastError?.takeIf(String::isNotBlank)?.let(errors::add)
+        var smtpState = enumValueOrDefault(job.smtpState, ChannelState.PENDING)
+        var telegramState = enumValueOrDefault(job.telegramState, ChannelState.SKIPPED)
         container.database.forwardDao().updateJob(job.id, JobState.SENDING.name, attempt)
 
-        try {
-            val profile = container.settings.activeProfile.first()
-                ?: throw IllegalStateException("No active SMTP profile")
-            container.smtpClient.sendSms(
-                profile,
-                container.secrets.smtpPassword(profile.id),
-                sender,
-                body,
-                job.receivedAt,
-            )
-            container.forwardRepository.markSuccess(job, attempt, sender)
-            Result.success()
-        } catch (error: Throwable) {
-            val message = SmtpClient.safeError(error)
-            val permanent = error is AuthenticationFailedException ||
-                error is SendFailedException ||
-                error is IllegalArgumentException ||
-                error.smtpStatusIsPermanent() ||
-                error.hasCause<SSLHandshakeException>() ||
-                error.hasCause<CertificateException>()
-            if (permanent || attempt >= MAX_ATTEMPTS) {
-                container.forwardRepository.markFailed(job, attempt, sender, message)
-                if (container.settings.settings.first().failureNotifications) {
-                    container.failureNotifier.show(job.id, message)
+        if (smtpState == ChannelState.PENDING) {
+            try {
+                val profile = container.settings.activeProfile.first()
+                    ?: throw IllegalStateException("No active SMTP profile")
+                container.smtpClient.sendSms(
+                    profile,
+                    container.secrets.smtpPassword(profile.id),
+                    sender,
+                    body,
+                    job.receivedAt,
+                )
+                smtpState = ChannelState.SENT
+            } catch (error: Throwable) {
+                errors += "Email: ${SmtpClient.safeError(error)}"
+                if (error.isPermanentSmtpFailure() || attempt >= MAX_ATTEMPTS) {
+                    smtpState = ChannelState.FAILED
                 }
-                Result.failure()
-            } else {
-                container.database.forwardDao()
-                    .updateJob(job.id, JobState.RETRYING.name, attempt, message)
-                Result.retry()
             }
+            container.database.forwardDao().updateChannelStates(job.id, smtpState.name, telegramState.name)
         }
+
+        if (telegramState == ChannelState.PENDING) {
+            try {
+                val settings = container.settings.settings.first()
+                container.telegramClient.sendSms(
+                    container.secrets.telegramToken(),
+                    settings.telegramChatId,
+                    sender,
+                    body,
+                    job.receivedAt,
+                )
+                telegramState = ChannelState.SENT
+            } catch (error: Throwable) {
+                errors += "Telegram: ${TelegramClient.safeError(error)}"
+                if ((error as? TelegramApiException)?.permanent == true ||
+                    error is IllegalArgumentException || attempt >= MAX_ATTEMPTS
+                ) {
+                    telegramState = ChannelState.FAILED
+                }
+            }
+            container.database.forwardDao().updateChannelStates(job.id, smtpState.name, telegramState.name)
+        }
+
+        val errorSummary = errors.joinToString(" · ").take(360).ifBlank { null }
+        if (smtpState == ChannelState.PENDING || telegramState == ChannelState.PENDING) {
+            container.database.forwardDao().updateJob(
+                job.id,
+                JobState.RETRYING.name,
+                attempt,
+                errorSummary,
+            )
+            return@withContext Result.retry()
+        }
+
+        val requested = listOf(smtpState, telegramState).filter { it != ChannelState.SKIPPED }
+        val sentCount = requested.count { it == ChannelState.SENT }
+        val result = when {
+            sentCount == requested.size -> JobState.SENT.name
+            sentCount == 0 -> JobState.FAILED.name
+            else -> PARTIAL_RESULT
+        }
+        val channelSummary = buildList {
+            if (smtpState != ChannelState.SKIPPED) add("Email ${smtpState.label()}")
+            if (telegramState != ChannelState.SKIPPED) add("Telegram ${telegramState.label()}")
+        }.joinToString(" · ")
+        container.forwardRepository.markCompleted(
+            job,
+            attempt,
+            sender,
+            result,
+            channelSummary,
+            errorSummary,
+        )
+        if (result != JobState.SENT.name && container.settings.settings.first().failureNotifications) {
+            container.failureNotifier.show(job.id, errorSummary ?: channelSummary)
+        }
+        if (result == JobState.FAILED.name) Result.failure() else Result.success()
+    }
+
+    private fun ChannelState.label() = when (this) {
+        ChannelState.SENT -> "sent"
+        ChannelState.FAILED -> "failed"
+        ChannelState.PENDING -> "pending"
+        ChannelState.SKIPPED -> "off"
     }
 
     private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
@@ -72,7 +131,11 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         return false
     }
 
-    private fun Throwable.smtpStatusIsPermanent(): Boolean {
+    private fun Throwable.isPermanentSmtpFailure(): Boolean {
+        if (this is AuthenticationFailedException || this is SendFailedException ||
+            this is IllegalArgumentException || hasCause<SSLHandshakeException>() ||
+            hasCause<CertificateException>()
+        ) return true
         var current: Throwable? = this
         while (current != null) {
             val code = when (current) {
@@ -86,8 +149,12 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         return false
     }
 
+    private inline fun <reified T : Enum<T>> enumValueOrDefault(raw: String, default: T): T =
+        runCatching { enumValueOf<T>(raw) }.getOrDefault(default)
+
     companion object {
         const val JOB_ID = "job_id"
+        const val PARTIAL_RESULT = "PARTIAL"
         private const val MAX_ATTEMPTS = 8
     }
 }

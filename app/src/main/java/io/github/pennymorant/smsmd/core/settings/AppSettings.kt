@@ -48,7 +48,13 @@ data class AppSettings(
     val activeProfileId: String = DEFAULT_PROFILE_ID,
     val failureNotifications: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val telegramEnabled: Boolean = false,
+    val telegramChatId: String = "",
+    val telegramVerified: Boolean = false,
 )
+
+val AppSettings.telegramReady: Boolean
+    get() = telegramEnabled && telegramChatId.isNotBlank() && telegramVerified
 
 fun defaultGmailProfile() = SmtpProfile(
     id = DEFAULT_PROFILE_ID,
