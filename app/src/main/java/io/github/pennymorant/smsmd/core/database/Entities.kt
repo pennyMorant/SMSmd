@@ -26,6 +26,7 @@ data class ForwardJobEntity(
     val lastError: String? = null,
     @ColumnInfo(defaultValue = "'PENDING'") val smtpState: String = ChannelState.PENDING.name,
     @ColumnInfo(defaultValue = "'SKIPPED'") val telegramState: String = ChannelState.SKIPPED.name,
+    val encryptedDeliveryConfig: String? = null,
 )
 
 @Entity(tableName = "delivery_logs")

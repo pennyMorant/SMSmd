@@ -21,7 +21,8 @@ A small native Android app that forwards incoming SMS messages through one selec
 - Optional failure notifications with a dedicated Android channel
 - In-app request to allow reliable background operation outside battery optimization
 - Checks GitHub Releases in Settings, verifies the APK digest, package, version, and signing certificate, then offers installation
-- Encrypts SMTP passwords, Telegram Bot tokens, queued senders, and message bodies with Android Keystore AES-GCM
+- Encrypts SMTP passwords, Telegram Bot tokens, queued senders, message bodies, and delivery snapshots with Android Keystore AES-GCM
+- Binds each queued message to the encrypted delivery configuration selected when it was received
 - Removes message content from the local queue after final success or failure
 
 ## Requirements

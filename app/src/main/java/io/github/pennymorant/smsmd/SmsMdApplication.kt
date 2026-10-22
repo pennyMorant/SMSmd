@@ -53,6 +53,11 @@ class AppContainer(application: Application) {
                     "ALTER TABLE delivery_logs ADD COLUMN channelSummary TEXT NOT NULL DEFAULT 'Email sent'",
                 )
             },
+            Migration(2, 3) { connection ->
+                connection.execSQL(
+                    "ALTER TABLE forward_jobs ADD COLUMN encryptedDeliveryConfig TEXT",
+                )
+            },
         )
         .build()
     val smtpClient = SmtpClient()
@@ -65,5 +70,6 @@ class AppContainer(application: Application) {
         database.forwardDao(),
         settings,
         crypto,
+        secrets,
     )
 }

@@ -8,6 +8,9 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class DeliveryEngine { EMAIL, TELEGRAM }
 
+internal fun legacyDeliveryEngine(telegramEnabled: Boolean, telegramVerified: Boolean): DeliveryEngine =
+    if (telegramEnabled && telegramVerified) DeliveryEngine.TELEGRAM else DeliveryEngine.EMAIL
+
 const val DEFAULT_PROFILE_ID = "default-gmail"
 
 data class SmtpProviderDefaults(

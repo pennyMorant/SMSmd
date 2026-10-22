@@ -517,7 +517,11 @@ private fun HomeScreen(
         item {
             val isTelegram = state.settings.activeEngine == DeliveryEngine.TELEGRAM
             val profile = state.activeProfile
-            val ready = if (isTelegram) state.settings.telegramVerified else profile?.smtpVerified == true
+            val ready = if (isTelegram) {
+                state.settings.telegramVerified && state.telegramCredentialReady
+            } else {
+                profile?.smtpVerified == true && profile.id in state.smtpCredentialProfileIds
+            }
             SummaryCard(
                 title = "Delivery profile",
                 detail = if (isTelegram) "Telegram Bot" else profile?.name ?: "No profile selected",
@@ -683,6 +687,7 @@ private fun SettingsScreen(
         item {
             TelegramProfileCard(
                 settings = state.settings,
+                credentialReady = state.telegramCredentialReady,
                 active = state.settings.activeEngine == DeliveryEngine.TELEGRAM,
                 select = selectTelegram,
                 edit = editTelegram,
@@ -691,6 +696,7 @@ private fun SettingsScreen(
         items(state.profiles, key = { it.id }) { profile ->
             ProfileCard(
                 profile = profile,
+                credentialReady = profile.id in state.smtpCredentialProfileIds,
                 active = state.settings.activeEngine == DeliveryEngine.EMAIL &&
                     profile.id == state.settings.activeProfileId,
                 testStatus = state.testStatus,
@@ -728,17 +734,19 @@ private fun DeliveryTypePicker(
 @Composable
 private fun TelegramProfileCard(
     settings: AppSettings,
+    credentialReady: Boolean,
     active: Boolean,
     select: () -> Unit,
     edit: () -> Unit,
 ) {
+    val ready = settings.telegramVerified && credentialReady
     Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(16.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            RadioButton(selected = active, onClick = select, enabled = settings.telegramVerified)
+            RadioButton(selected = active, onClick = select, enabled = ready)
             Column(Modifier.weight(1f)) {
                 Text("Telegram Bot", style = MaterialTheme.typography.titleMedium)
                 Text(
@@ -747,8 +755,8 @@ private fun TelegramProfileCard(
                 )
             }
             StatusPill(
-                text = if (settings.telegramVerified) "Ready" else "Not ready",
-                tone = if (settings.telegramVerified) StatusTone.SUCCESS else StatusTone.WARNING,
+                text = if (ready) "Ready" else "Not ready",
+                tone = if (ready) StatusTone.SUCCESS else StatusTone.WARNING,
             )
             FilledTonalIconButton(onClick = edit) {
                 Icon(Icons.Outlined.Edit, contentDescription = "Edit Telegram configuration")
@@ -820,7 +828,7 @@ private fun TelegramEditor(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text("Telegram configuration", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
-            val verified = settings.telegramVerified && !dirty
+            val verified = settings.telegramVerified && token.isNotBlank() && !dirty
             StatusPill(
                 text = when {
                     testStatus.phase == TelegramTestPhase.TESTING -> "Testing"
@@ -1000,12 +1008,14 @@ private fun PermissionRow(
 @Composable
 private fun ProfileCard(
     profile: SmtpProfile,
+    credentialReady: Boolean,
     active: Boolean,
     testStatus: SmtpTestStatus,
     select: () -> Unit,
     edit: () -> Unit,
     delete: () -> Unit,
 ) {
+    val ready = profile.smtpVerified && credentialReady
     val phase = if (testStatus.profileId == profile.id) testStatus.phase else SmtpTestPhase.IDLE
     val testing = phase == SmtpTestPhase.TESTING
     Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
@@ -1014,7 +1024,7 @@ private fun ProfileCard(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Row(verticalAlignment = Alignment.Top) {
-                RadioButton(selected = active, onClick = select, enabled = profile.smtpVerified)
+                RadioButton(selected = active, onClick = select, enabled = ready)
                 Column(Modifier.weight(1f)) {
                     Text(profile.name, style = MaterialTheme.typography.titleMedium)
                     Text(
@@ -1026,13 +1036,13 @@ private fun ProfileCard(
                     text = when {
                         testing -> "Testing"
                         phase == SmtpTestPhase.FAILED -> "Failed"
-                        profile.smtpVerified -> "Verified"
+                        ready -> "Ready"
                         else -> "Not ready"
                     },
                     tone = when {
                         testing -> StatusTone.INFO
                         phase == SmtpTestPhase.FAILED -> StatusTone.ERROR
-                        profile.smtpVerified -> StatusTone.SUCCESS
+                        ready -> StatusTone.SUCCESS
                         else -> StatusTone.WARNING
                     },
                 )

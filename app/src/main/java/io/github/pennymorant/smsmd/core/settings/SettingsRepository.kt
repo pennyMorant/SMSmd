@@ -21,10 +21,7 @@ class SettingsRepository(private val context: Context) {
             activeProfileId = values[Keys.activeProfileId] ?: DEFAULT_PROFILE_ID,
             failureNotifications = values[Keys.failureNotifications] ?: false,
             themeMode = enumValueOrDefault(values[Keys.themeMode], ThemeMode.SYSTEM),
-            activeEngine = enumValueOrDefault(
-                values[Keys.activeEngine],
-                if (values[Keys.telegramEnabled] == true) DeliveryEngine.TELEGRAM else DeliveryEngine.EMAIL,
-            ),
+            activeEngine = activeEngine(values),
             telegramChatId = values[Keys.telegramChatId].orEmpty(),
             telegramVerified = values[Keys.telegramVerified] ?: false,
         )
@@ -57,6 +54,11 @@ class SettingsRepository(private val context: Context) {
             values[stringKey(profile.id, "recipients")] = profile.recipientAddresses.trim()
             values[booleanKey(profile.id, "verified")] = profile.smtpVerified
             if (values[Keys.activeProfileId].isNullOrBlank()) values[Keys.activeProfileId] = profile.id
+            if (values[Keys.activeProfileId] == profile.id &&
+                activeEngine(values) == DeliveryEngine.EMAIL && !profile.smtpVerified
+            ) {
+                values[Keys.enabled] = false
+            }
         }
     }
 
@@ -70,9 +72,7 @@ class SettingsRepository(private val context: Context) {
             values.remove(booleanKey(profileId, "verified"))
             if (values[Keys.activeProfileId] == profileId) {
                 values[Keys.activeProfileId] = remaining.firstOrNull().orEmpty()
-                val telegramActive = values[Keys.activeEngine] == DeliveryEngine.TELEGRAM.name ||
-                    (values[Keys.activeEngine] == null && values[Keys.telegramEnabled] == true)
-                if (!telegramActive) values[Keys.enabled] = false
+                if (activeEngine(values) != DeliveryEngine.TELEGRAM) values[Keys.enabled] = false
             }
         }
     }
@@ -104,8 +104,19 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit {
             it[Keys.telegramChatId] = chatId.trim()
             it[Keys.telegramVerified] = verified
+            if (activeEngine(it) == DeliveryEngine.TELEGRAM && !verified) {
+                it[Keys.enabled] = false
+            }
         }
     }
+
+    private fun activeEngine(values: Preferences): DeliveryEngine = enumValueOrDefault(
+        values[Keys.activeEngine],
+        legacyDeliveryEngine(
+            telegramEnabled = values[Keys.telegramEnabled] == true,
+            telegramVerified = values[Keys.telegramVerified] == true,
+        ),
+    )
 
     private fun readProfile(values: Preferences, id: String): SmtpProfile {
         val provider = enumValueOrDefault(values[stringKey(id, "provider")], SmtpProvider.CUSTOM)

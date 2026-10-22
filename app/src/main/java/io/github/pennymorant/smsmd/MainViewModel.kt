@@ -46,6 +46,8 @@ data class MainUiState(
     val lastDelivery: DeliveryLogEntity? = null,
     val testStatus: SmtpTestStatus = SmtpTestStatus(),
     val telegramTestStatus: TelegramTestStatus = TelegramTestStatus(),
+    val smtpCredentialProfileIds: Set<String> = emptySet(),
+    val telegramCredentialReady: Boolean = false,
 ) {
     val activeProfile: SmtpProfile?
         get() = profiles.firstOrNull { it.id == settings.activeProfileId }
@@ -62,7 +64,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         container.database.forwardDao().observeLastDelivery(),
         testStatus,
     ) { settings, profiles, pending, lastDelivery, currentTest ->
-        MainUiState(settings, profiles, pending, lastDelivery, currentTest)
+        MainUiState(
+            settings = settings,
+            profiles = profiles,
+            pendingCount = pending,
+            lastDelivery = lastDelivery,
+            testStatus = currentTest,
+            smtpCredentialProfileIds = profiles
+                .filter { container.secrets.hasSmtpPassword(it.id) }
+                .mapTo(mutableSetOf()) { it.id },
+            telegramCredentialReady = container.secrets.hasTelegramToken(),
+        )
     }
 
     val uiState: StateFlow<MainUiState> = combine(baseUiState, telegramTestStatus) { state, telegramTest ->
@@ -98,13 +110,13 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             val result = runCatching {
                 validateProfile(profile, requireCredentials = true)
                 persistSynthesizedDefaultBefore(profile)
-                if (newPassword.isNotBlank()) container.secrets.saveSmtpPassword(profile.id, newPassword)
-                val password = container.secrets.smtpPassword(profile.id)
+                val password = newPassword.ifBlank { container.secrets.smtpPassword(profile.id) }
                 require(password.isNotBlank()) { "App password is required" }
-                val unverified = profile.copy(smtpVerified = false)
-                container.settings.saveProfile(unverified)
-                withContext(Dispatchers.IO) { container.smtpClient.sendTest(unverified, password) }
-                container.settings.saveProfile(unverified.copy(smtpVerified = true))
+                withContext(Dispatchers.IO) {
+                    container.smtpClient.sendTest(profile.copy(smtpVerified = false), password)
+                }
+                if (newPassword.isNotBlank()) container.secrets.saveSmtpPassword(profile.id, newPassword)
+                container.settings.saveProfile(profile.copy(smtpVerified = true))
             }
             result.onSuccess {
                 testStatus.value = SmtpTestStatus(profile.id, SmtpTestPhase.SUCCESS, "Verified")
@@ -224,11 +236,10 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.TESTING)
             val result = runCatching {
                 validateTelegram(token, chatId)
-                container.secrets.saveTelegramToken(token.trim())
-                container.settings.saveTelegram(chatId, verified = false)
                 withContext(Dispatchers.IO) {
                     container.telegramClient.sendTest(token.trim(), chatId.trim())
                 }
+                container.secrets.saveTelegramToken(token.trim())
                 container.settings.saveTelegram(chatId, verified = true)
             }
             result.onSuccess {

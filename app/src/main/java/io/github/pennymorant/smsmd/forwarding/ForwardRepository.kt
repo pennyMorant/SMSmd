@@ -9,6 +9,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import io.github.pennymorant.smsmd.core.crypto.CryptoManager
+import io.github.pennymorant.smsmd.core.crypto.SecretStore
 import io.github.pennymorant.smsmd.core.database.DeliveryLogEntity
 import io.github.pennymorant.smsmd.core.database.ChannelState
 import io.github.pennymorant.smsmd.core.database.ForwardDao
@@ -47,19 +48,26 @@ class ForwardRepository(
     private val dao: ForwardDao,
     private val settingsRepository: SettingsRepository,
     private val crypto: CryptoManager,
+    private val secrets: SecretStore,
 ) {
     private val workManager = WorkManager.getInstance(context)
 
     suspend fun accept(sender: String, body: String, receivedAt: Long, subscriptionId: Int): Long? {
         val settings = settingsRepository.settings.first()
         val profile = settingsRepository.activeProfile.first()
+        val smtpPassword = profile?.let { secrets.smtpPassword(it.id) }.orEmpty()
+        val telegramToken = secrets.telegramToken()
         val channels = resolveDeliveryChannels(
             activeEngine = settings.activeEngine,
-            smtpVerified = profile?.smtpVerified == true,
-            telegramReady = settings.telegramReady,
+            smtpVerified = profile?.smtpVerified == true && smtpPassword.isNotBlank(),
+            telegramReady = settings.telegramReady && telegramToken.isNotBlank(),
         )
         val deliveryReady = channels.smtp == ChannelState.PENDING || channels.telegram == ChannelState.PENDING
         if (!settings.forwardingEnabled || !deliveryReady || body.isBlank()) return null
+        val snapshot = when (settings.activeEngine) {
+            DeliveryEngine.EMAIL -> DeliverySnapshot.Email(requireNotNull(profile), smtpPassword)
+            DeliveryEngine.TELEGRAM -> DeliverySnapshot.Telegram(telegramToken, settings.telegramChatId)
+        }
 
         val fingerprint = fingerprint(sender, body, receivedAt, subscriptionId)
         val id = dao.insertJob(
@@ -71,6 +79,7 @@ class ForwardRepository(
                 subscriptionId = subscriptionId,
                 smtpState = channels.smtp.name,
                 telegramState = channels.telegram.name,
+                encryptedDeliveryConfig = crypto.encrypt(DeliverySnapshotCodec.encode(snapshot)),
             ),
         )
         if (id > 0) enqueue(id)
@@ -108,6 +117,17 @@ class ForwardRepository(
             ),
         )
         dao.deleteJob(job.id)
+    }
+
+    suspend fun markUndeliverable(job: ForwardJobEntity, attempt: Int, error: String) {
+        markCompleted(
+            job = job,
+            attempt = attempt,
+            sender = "Unavailable",
+            result = JobState.FAILED.name,
+            channelSummary = "Delivery failed",
+            error = error,
+        )
     }
 
     private fun fingerprint(sender: String, body: String, receivedAt: Long, subscriptionId: Int): String {

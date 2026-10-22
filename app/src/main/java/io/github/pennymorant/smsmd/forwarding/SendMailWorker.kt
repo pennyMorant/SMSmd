@@ -26,10 +26,30 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val container = (applicationContext as SmsMdApplication).container
         val job = container.database.forwardDao().getJob(jobId) ?: return@withContext Result.success()
         val attempt = runAttemptCount + 1
-        val sender = runCatching { container.crypto.decrypt(job.encryptedSender) }
-            .getOrElse { return@withContext Result.failure() }
-        val body = runCatching { container.crypto.decrypt(job.encryptedBody) }
-            .getOrElse { return@withContext Result.failure() }
+        suspend fun failQueuedMessage(message: String): Result {
+            container.forwardRepository.markUndeliverable(job, attempt, message)
+            if (container.settings.settings.first().failureNotifications) {
+                container.failureNotifier.show(job.id, message)
+            }
+            return Result.failure()
+        }
+        val sender = try {
+            container.crypto.decrypt(job.encryptedSender)
+        } catch (_: Throwable) {
+            return@withContext failQueuedMessage("Stored sender could not be decrypted")
+        }
+        val body = try {
+            container.crypto.decrypt(job.encryptedBody)
+        } catch (_: Throwable) {
+            return@withContext failQueuedMessage("Stored message could not be decrypted")
+        }
+        val snapshot = try {
+            job.encryptedDeliveryConfig?.let {
+                DeliverySnapshotCodec.decode(container.crypto.decrypt(it))
+            }
+        } catch (_: Throwable) {
+            return@withContext failQueuedMessage("Stored delivery configuration could not be decrypted")
+        }
         val errors = linkedSetOf<String>()
         job.lastError?.takeIf(String::isNotBlank)?.let(errors::add)
         var smtpState = enumValueOrDefault(job.smtpState, ChannelState.PENDING)
@@ -38,11 +58,19 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
         if (smtpState == ChannelState.PENDING) {
             try {
-                val profile = container.settings.activeProfile.first()
-                    ?: throw IllegalStateException("No active SMTP profile")
+                val emailSnapshot = when (snapshot) {
+                    null -> null
+                    is DeliverySnapshot.Email -> snapshot
+                    is DeliverySnapshot.Telegram -> throw IllegalArgumentException(
+                        "Queued delivery configuration does not match email",
+                    )
+                }
+                val profile = emailSnapshot?.profile ?: container.settings.activeProfile.first()
+                    ?: throw IllegalStateException("No SMTP profile for queued message")
+                val password = emailSnapshot?.password ?: container.secrets.smtpPassword(profile.id)
                 container.smtpClient.sendSms(
                     profile,
-                    container.secrets.smtpPassword(profile.id),
+                    password,
                     sender,
                     body,
                     job.receivedAt,
@@ -59,10 +87,17 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
         if (telegramState == ChannelState.PENDING) {
             try {
-                val settings = container.settings.settings.first()
+                val telegramSnapshot = when (snapshot) {
+                    null -> null
+                    is DeliverySnapshot.Telegram -> snapshot
+                    is DeliverySnapshot.Email -> throw IllegalArgumentException(
+                        "Queued delivery configuration does not match Telegram",
+                    )
+                }
+                val settings = if (telegramSnapshot == null) container.settings.settings.first() else null
                 container.telegramClient.sendSms(
-                    container.secrets.telegramToken(),
-                    settings.telegramChatId,
+                    telegramSnapshot?.token ?: container.secrets.telegramToken(),
+                    telegramSnapshot?.chatId ?: requireNotNull(settings).telegramChatId,
                     sender,
                     body,
                     job.receivedAt,
