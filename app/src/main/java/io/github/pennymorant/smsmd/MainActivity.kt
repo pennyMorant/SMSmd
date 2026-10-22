@@ -97,6 +97,7 @@ import io.github.pennymorant.smsmd.core.settings.SmtpProvider
 import io.github.pennymorant.smsmd.core.settings.SmtpSecurity
 import io.github.pennymorant.smsmd.core.settings.ThemeMode
 import io.github.pennymorant.smsmd.core.settings.AppSettings
+import io.github.pennymorant.smsmd.core.settings.DeliveryEngine
 import io.github.pennymorant.smsmd.core.settings.defaults
 import io.github.pennymorant.smsmd.core.telegram.TelegramChat
 import io.github.pennymorant.smsmd.core.telegram.TelegramClient
@@ -311,6 +312,8 @@ private fun SmsMdApp(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
     var showSmsDisclosure by rememberSaveable { mutableStateOf(false) }
+    var showProfileTypePicker by rememberSaveable { mutableStateOf(false) }
+    var editingTelegram by rememberSaveable { mutableStateOf(false) }
     var editingProfile by remember { mutableStateOf<ProfileEditorState?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -348,17 +351,49 @@ private fun SmsMdApp(
         }
     }
 
+    if (showProfileTypePicker) {
+        ModalBottomSheet(
+            onDismissRequest = { showProfileTypePicker = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            DeliveryTypePicker(
+                selectEmail = {
+                    showProfileTypePicker = false
+                    editingProfile = ProfileEditorState(newProfile(SmtpProvider.GMAIL), "")
+                },
+                selectTelegram = {
+                    showProfileTypePicker = false
+                    editingTelegram = true
+                },
+            )
+        }
+    }
+
+    if (editingTelegram) {
+        ModalBottomSheet(
+            onDismissRequest = { editingTelegram = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            TelegramEditor(
+                settings = state.settings,
+                testStatus = state.telegramTestStatus,
+                loadToken = viewModel::loadTelegramToken,
+                save = viewModel::saveTelegram,
+                test = { token, chatId -> viewModel.testTelegram(token, chatId, showMessage) },
+                detectChats = viewModel::detectTelegramChats,
+            )
+        }
+    }
+
     Scaffold(
         topBar = { CenterAlignedTopAppBar(title = { Text(selectedTab.label) }) },
         snackbarHost = { SnackbarHost(snackbar) },
         floatingActionButton = {
             if (selectedTab == AppTab.SETTINGS) {
                 FloatingActionButton(
-                    onClick = {
-                        editingProfile = ProfileEditorState(newProfile(SmtpProvider.GMAIL), "")
-                    },
+                    onClick = { showProfileTypePicker = true },
                 ) {
-                    Icon(Icons.Outlined.Add, contentDescription = "Add SMTP profile")
+                    Icon(Icons.Outlined.Add, contentDescription = "Add delivery profile")
                 }
             }
         },
@@ -415,12 +450,8 @@ private fun SmsMdApp(
                     },
                     selectProfile = { viewModel.selectProfile(it, showMessage) },
                     deleteProfile = { viewModel.deleteProfile(it, showMessage) },
-                    loadTelegramToken = viewModel::loadTelegramToken,
-                    saveTelegram = viewModel::saveTelegram,
-                    testTelegram = { enabled, token, chatId ->
-                        viewModel.testTelegram(enabled, token, chatId, showMessage)
-                    },
-                    detectTelegramChats = viewModel::detectTelegramChats,
+                    editTelegram = { editingTelegram = true },
+                    selectTelegram = { viewModel.selectTelegram(showMessage) },
                     checkForUpdate = checkForUpdate,
                     installUpdate = installUpdate,
                 )
@@ -437,7 +468,7 @@ private fun PermissionDisclosure(dismiss: () -> Unit, continueRequest: () -> Uni
         text = {
             Text(
                 "SMSmd reads new incoming messages only so it can forward them through your active " +
-                    "SMTP profile. Message content is encrypted locally and removed after delivery.",
+                    "delivery profile. Message content is encrypted locally and removed after delivery.",
             )
         },
         confirmButton = { TextButton(onClick = continueRequest) { Text("Continue") } },
@@ -484,26 +515,16 @@ private fun HomeScreen(
             })
         }
         item {
+            val isTelegram = state.settings.activeEngine == DeliveryEngine.TELEGRAM
             val profile = state.activeProfile
-            val ready = profile?.smtpVerified == true
+            val ready = if (isTelegram) state.settings.telegramVerified else profile?.smtpVerified == true
             SummaryCard(
-                title = "Active SMTP",
-                detail = profile?.name ?: "No profile selected",
-                trailing = {
-                    StatusPill(if (ready) "Ready" else "Not ready", if (ready) StatusTone.SUCCESS else StatusTone.WARNING)
-                },
-            )
-        }
-        item {
-            val enabled = state.settings.telegramEnabled
-            val ready = enabled && state.settings.telegramVerified
-            SummaryCard(
-                title = "Telegram",
-                detail = if (enabled) state.settings.telegramChatId.ifBlank { "No chat selected" } else "Disabled",
+                title = "Delivery profile",
+                detail = if (isTelegram) "Telegram Bot" else profile?.name ?: "No profile selected",
                 trailing = {
                     StatusPill(
-                        text = if (!enabled) "Off" else if (ready) "Ready" else "Not ready",
-                        tone = if (!enabled) StatusTone.NEUTRAL else if (ready) StatusTone.SUCCESS else StatusTone.WARNING,
+                        text = if (ready) "Ready" else "Not ready",
+                        tone = if (ready) StatusTone.SUCCESS else StatusTone.WARNING,
                     )
                 },
             )
@@ -583,10 +604,8 @@ private fun SettingsScreen(
     editProfile: (SmtpProfile) -> Unit,
     selectProfile: (SmtpProfile) -> Unit,
     deleteProfile: (SmtpProfile) -> Unit,
-    loadTelegramToken: ((String) -> Unit) -> Unit,
-    saveTelegram: (Boolean, String, String, (Boolean, String) -> Unit) -> Unit,
-    testTelegram: (Boolean, String, String) -> Unit,
-    detectTelegramChats: (String, (Result<List<TelegramChat>>) -> Unit) -> Unit,
+    editTelegram: () -> Unit,
+    selectTelegram: () -> Unit,
     checkForUpdate: () -> Unit,
     installUpdate: () -> Unit,
 ) {
@@ -614,16 +633,6 @@ private fun SettingsScreen(
                     }
                 }
             }
-        }
-        item {
-            TelegramCard(
-                settings = state.settings,
-                testStatus = state.telegramTestStatus,
-                loadToken = loadTelegramToken,
-                save = saveTelegram,
-                test = testTelegram,
-                detectChats = detectTelegramChats,
-            )
         }
         item {
             AppUpdateCard(
@@ -667,14 +676,23 @@ private fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("SMTP profiles", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-                Text("${state.profiles.size}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Delivery profiles", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("${state.profiles.size + 1}", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+        }
+        item {
+            TelegramProfileCard(
+                settings = state.settings,
+                active = state.settings.activeEngine == DeliveryEngine.TELEGRAM,
+                select = selectTelegram,
+                edit = editTelegram,
+            )
         }
         items(state.profiles, key = { it.id }) { profile ->
             ProfileCard(
                 profile = profile,
-                active = profile.id == state.settings.activeProfileId,
+                active = state.settings.activeEngine == DeliveryEngine.EMAIL &&
+                    profile.id == state.settings.activeProfileId,
                 testStatus = state.testStatus,
                 select = { selectProfile(profile) },
                 edit = { editProfile(profile) },
@@ -684,17 +702,70 @@ private fun SettingsScreen(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TelegramCard(
+private fun DeliveryTypePicker(
+    selectEmail: () -> Unit,
+    selectTelegram: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Add delivery profile", style = MaterialTheme.typography.headlineSmall)
+        OutlinedButton(onClick = selectTelegram, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Telegram")
+        }
+        OutlinedButton(onClick = selectEmail, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Outlined.Email, contentDescription = null)
+            Spacer(Modifier.size(8.dp))
+            Text("Email")
+        }
+    }
+}
+
+@Composable
+private fun TelegramProfileCard(
+    settings: AppSettings,
+    active: Boolean,
+    select: () -> Unit,
+    edit: () -> Unit,
+) {
+    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            RadioButton(selected = active, onClick = select, enabled = settings.telegramVerified)
+            Column(Modifier.weight(1f)) {
+                Text("Telegram Bot", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    settings.telegramChatId.ifBlank { "Not configured" },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            StatusPill(
+                text = if (settings.telegramVerified) "Ready" else "Not ready",
+                tone = if (settings.telegramVerified) StatusTone.SUCCESS else StatusTone.WARNING,
+            )
+            FilledTonalIconButton(onClick = edit) {
+                Icon(Icons.Outlined.Edit, contentDescription = "Edit Telegram configuration")
+            }
+        }
+    }
+}
+
+@Composable
+private fun TelegramEditor(
     settings: AppSettings,
     testStatus: TelegramTestStatus,
     loadToken: ((String) -> Unit) -> Unit,
-    save: (Boolean, String, String, (Boolean, String) -> Unit) -> Unit,
-    test: (Boolean, String, String) -> Unit,
+    save: (String, String, (Boolean, String) -> Unit) -> Unit,
+    test: (String, String) -> Unit,
     detectChats: (String, (Result<List<TelegramChat>>) -> Unit) -> Unit,
 ) {
-    var enabled by rememberSaveable { mutableStateOf(settings.telegramEnabled) }
     var token by rememberSaveable { mutableStateOf("") }
     var chatId by rememberSaveable { mutableStateOf(settings.telegramChatId) }
     var savePhase by rememberSaveable { mutableStateOf(ProfileSavePhase.IDLE) }
@@ -711,153 +782,133 @@ private fun TelegramCard(
     }
 
     if (showChats) {
-        ModalBottomSheet(
+        AlertDialog(
             onDismissRequest = { showChats = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("Select Telegram chat", style = MaterialTheme.typography.headlineSmall)
-                Spacer(Modifier.height(8.dp))
-                detectedChats.forEach { chat ->
-                    TextButton(
-                        onClick = {
-                            chatId = chat.id
-                            dirty = true
-                            showChats = false
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Column(Modifier.fillMaxWidth()) {
-                            Text(chat.title, style = MaterialTheme.typography.bodyLarge)
-                            Text(
-                                "${chat.type} · ${chat.id}",
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
+            title = { Text("Select Telegram chat") },
+            text = {
+                LazyColumn(Modifier.fillMaxWidth().fillMaxHeight(0.5f)) {
+                    items(detectedChats, key = { it.id }) { chat ->
+                        TextButton(
+                            onClick = {
+                                chatId = chat.id
+                                dirty = true
+                                showChats = false
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Column(Modifier.fillMaxWidth()) {
+                                Text(chat.title, style = MaterialTheme.typography.bodyLarge)
+                                Text(
+                                    "${chat.type} · ${chat.id}",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
                         }
                     }
                 }
-            }
-        }
+            },
+            confirmButton = {},
+        )
     }
 
-    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+    Column(
+        modifier = Modifier.fillMaxWidth().imePadding().padding(start = 20.dp, end = 20.dp, bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text("Telegram Bot", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        if (enabled) "Forwarding channel enabled" else "Forwarding channel disabled",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+            Text("Telegram configuration", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.weight(1f))
+            val verified = settings.telegramVerified && !dirty
+            StatusPill(
+                text = when {
+                    testStatus.phase == TelegramTestPhase.TESTING -> "Testing"
+                    testStatus.phase == TelegramTestPhase.FAILED -> "Failed"
+                    verified -> "Ready"
+                    else -> "Not ready"
+                },
+                tone = when {
+                    testStatus.phase == TelegramTestPhase.TESTING -> StatusTone.INFO
+                    testStatus.phase == TelegramTestPhase.FAILED -> StatusTone.ERROR
+                    verified -> StatusTone.SUCCESS
+                    else -> StatusTone.WARNING
+                },
+            )
+        }
+        OutlinedTextField(
+            value = token,
+            onValueChange = {
+                token = it
+                dirty = true
+            },
+            label = { Text("Bot token") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = chatId,
+            onValueChange = {
+                chatId = it
+                dirty = true
+            },
+            label = { Text("Chat ID") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedButton(
+            onClick = {
+                detecting = true
+                detectError = ""
+                detectChats(token) { result ->
+                    detecting = false
+                    result.onSuccess {
+                        detectedChats = it
+                        showChats = true
+                    }.onFailure { detectError = TelegramClient.safeError(it) }
                 }
-                val verified = settings.telegramVerified && !dirty
-                StatusPill(
-                    text = when {
-                        testStatus.phase == TelegramTestPhase.TESTING -> "Testing"
-                        !enabled -> "Off"
-                        testStatus.phase == TelegramTestPhase.FAILED -> "Failed"
-                        verified -> "Ready"
-                        else -> "Required"
-                    },
-                    tone = when {
-                        testStatus.phase == TelegramTestPhase.TESTING -> StatusTone.INFO
-                        !enabled -> StatusTone.NEUTRAL
-                        testStatus.phase == TelegramTestPhase.FAILED -> StatusTone.ERROR
-                        verified -> StatusTone.SUCCESS
-                        else -> StatusTone.WARNING
-                    },
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = {
-                        enabled = it
-                        dirty = true
-                    },
-                )
+            },
+            enabled = !detecting && testStatus.phase != TelegramTestPhase.TESTING,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (detecting) {
+                CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            } else {
+                Icon(Icons.Outlined.Sync, contentDescription = null)
             }
-            OutlinedTextField(
-                value = token,
-                onValueChange = {
-                    token = it
-                    dirty = true
-                },
-                label = { Text("Bot token") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            OutlinedTextField(
-                value = chatId,
-                onValueChange = {
-                    chatId = it
-                    dirty = true
-                },
-                label = { Text("Chat ID") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            Spacer(Modifier.size(8.dp))
+            Text(if (detecting) "Detecting" else "Detect chat")
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             OutlinedButton(
                 onClick = {
-                    detecting = true
-                    detectError = ""
-                    detectChats(token) { result ->
-                        detecting = false
-                        result.onSuccess {
-                            detectedChats = it
-                            showChats = true
-                        }.onFailure { detectError = TelegramClient.safeError(it) }
+                    savePhase = ProfileSavePhase.SAVING
+                    saveError = ""
+                    save(token, chatId) { success, message ->
+                        savePhase = if (success) ProfileSavePhase.SUCCESS else ProfileSavePhase.FAILED
+                        if (success) dirty = false
+                        else saveError = message
                     }
                 },
-                enabled = !detecting && testStatus.phase != TelegramTestPhase.TESTING,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (detecting) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Outlined.Sync, contentDescription = null)
-                }
-                Spacer(Modifier.size(8.dp))
-                Text(if (detecting) "Detecting" else "Detect chat")
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(
-                    onClick = {
-                        savePhase = ProfileSavePhase.SAVING
-                        saveError = ""
-                        save(enabled, token, chatId) { success, message ->
-                            savePhase = if (success) ProfileSavePhase.SUCCESS else ProfileSavePhase.FAILED
-                            if (success) dirty = false
-                            else saveError = message
-                        }
-                    },
-                    modifier = Modifier.weight(1f),
-                    enabled = savePhase != ProfileSavePhase.SAVING &&
-                        testStatus.phase != TelegramTestPhase.TESTING,
-                ) { SaveButtonContent(savePhase) }
-                Button(
-                    onClick = { test(enabled, token, chatId) },
-                    modifier = Modifier.weight(1f),
-                    enabled = savePhase != ProfileSavePhase.SAVING &&
-                        testStatus.phase != TelegramTestPhase.TESTING,
-                ) { TelegramTestButtonContent(testStatus.phase) }
-            }
-            if (detectError.isNotBlank()) {
-                Text(detectError, color = MaterialTheme.colorScheme.error)
-            }
-            if (saveError.isNotBlank()) {
-                Text(saveError, color = MaterialTheme.colorScheme.error)
-            }
-            if (testStatus.phase == TelegramTestPhase.FAILED && testStatus.message.isNotBlank()) {
-                Text(testStatus.message, color = MaterialTheme.colorScheme.error)
-            }
+                modifier = Modifier.weight(1f),
+                enabled = savePhase != ProfileSavePhase.SAVING &&
+                    testStatus.phase != TelegramTestPhase.TESTING,
+            ) { SaveButtonContent(savePhase) }
+            Button(
+                onClick = { test(token, chatId) },
+                modifier = Modifier.weight(1f),
+                enabled = savePhase != ProfileSavePhase.SAVING &&
+                    testStatus.phase != TelegramTestPhase.TESTING,
+            ) { TelegramTestButtonContent(testStatus.phase) }
+        }
+        if (detectError.isNotBlank()) {
+            Text(detectError, color = MaterialTheme.colorScheme.error)
+        }
+        if (saveError.isNotBlank()) {
+            Text(saveError, color = MaterialTheme.colorScheme.error)
+        }
+        if (testStatus.phase == TelegramTestPhase.FAILED && testStatus.message.isNotBlank()) {
+            Text(testStatus.message, color = MaterialTheme.colorScheme.error)
         }
     }
 }

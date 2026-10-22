@@ -1,6 +1,6 @@
 # SMSmd
 
-A small native Android app that forwards incoming SMS messages through email, Telegram, or both.
+A small native Android app that forwards incoming SMS messages through one selected email or Telegram profile.
 
 ## Features
 
@@ -8,12 +8,13 @@ A small native Android app that forwards incoming SMS messages through email, Te
 - Forwards incoming messages when forwarding is enabled
 - Reassembles multipart messages and prevents duplicate forwarding
 - Includes Gmail and Outlook SMTP provider presets plus custom SMTP
-- Supports multiple encrypted SMTP profiles with one active profile
+- Shows email and Telegram together in one delivery profile list
+- Supports multiple encrypted SMTP profiles and one Telegram Bot profile
+- Uses exactly one selected delivery profile for each incoming SMS
 - Supports SMTP with required STARTTLS or implicit TLS
 - Sends the complete SMS through a Telegram Bot with a tested Bot Token and Chat ID
 - Detects recent Telegram chats after the user starts the bot
-- Tracks email and Telegram independently so retries do not duplicate a successful channel
-- Requires a successful test email before forwarding can be enabled
+- Requires a successful real delivery test before a profile can be selected
 - Persists delivery work and retries temporary network/SMTP failures
 - Classifies authentication, certificate, and permanent SMTP failures
 - Shows only the most recent delivery result
@@ -65,13 +66,11 @@ break the package registration and prevent installed copies from updating.
 ## Setup
 
 1. Open Settings and tap the add button.
-2. Choose Gmail, Outlook, or Custom SMTP. Provider server settings are filled automatically.
-3. Enter the email address, app password, sender, and recipients.
-4. Send a test email, then select the verified profile as active.
-5. Grant incoming SMS access in Settings and enable forwarding on the Home tab.
-
-Telegram can be enabled independently. Create a bot with BotFather, send `/start`
-to it, enter the Bot Token, detect or enter the Chat ID, and run the real send test.
+2. Choose Email or Telegram in the bottom sheet.
+3. For email, choose Gmail, Outlook, or Custom SMTP and enter the account details.
+4. For Telegram, create a bot with BotFather, send `/start`, then enter the Bot Token and Chat ID.
+5. Run the real send test and select the verified profile with its radio button.
+6. Grant incoming SMS access in Settings and enable forwarding on the Home tab.
 
 ## Privacy
 

@@ -21,7 +21,10 @@ class SettingsRepository(private val context: Context) {
             activeProfileId = values[Keys.activeProfileId] ?: DEFAULT_PROFILE_ID,
             failureNotifications = values[Keys.failureNotifications] ?: false,
             themeMode = enumValueOrDefault(values[Keys.themeMode], ThemeMode.SYSTEM),
-            telegramEnabled = values[Keys.telegramEnabled] ?: false,
+            activeEngine = enumValueOrDefault(
+                values[Keys.activeEngine],
+                if (values[Keys.telegramEnabled] == true) DeliveryEngine.TELEGRAM else DeliveryEngine.EMAIL,
+            ),
             telegramChatId = values[Keys.telegramChatId].orEmpty(),
             telegramVerified = values[Keys.telegramVerified] ?: false,
         )
@@ -67,13 +70,22 @@ class SettingsRepository(private val context: Context) {
             values.remove(booleanKey(profileId, "verified"))
             if (values[Keys.activeProfileId] == profileId) {
                 values[Keys.activeProfileId] = remaining.firstOrNull().orEmpty()
-                values[Keys.enabled] = false
+                val telegramActive = values[Keys.activeEngine] == DeliveryEngine.TELEGRAM.name ||
+                    (values[Keys.activeEngine] == null && values[Keys.telegramEnabled] == true)
+                if (!telegramActive) values[Keys.enabled] = false
             }
         }
     }
 
     suspend fun setActiveProfile(profileId: String) {
-        context.settingsDataStore.edit { it[Keys.activeProfileId] = profileId }
+        context.settingsDataStore.edit {
+            it[Keys.activeProfileId] = profileId
+            it[Keys.activeEngine] = DeliveryEngine.EMAIL.name
+        }
+    }
+
+    suspend fun setActiveEngine(engine: DeliveryEngine) {
+        context.settingsDataStore.edit { it[Keys.activeEngine] = engine.name }
     }
 
     suspend fun setEnabled(enabled: Boolean) {
@@ -88,9 +100,8 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.themeMode] = themeMode.name }
     }
 
-    suspend fun saveTelegram(enabled: Boolean, chatId: String, verified: Boolean) {
+    suspend fun saveTelegram(chatId: String, verified: Boolean) {
         context.settingsDataStore.edit {
-            it[Keys.telegramEnabled] = enabled
             it[Keys.telegramChatId] = chatId.trim()
             it[Keys.telegramVerified] = verified
         }
@@ -144,6 +155,7 @@ class SettingsRepository(private val context: Context) {
         val profileIds = stringSetPreferencesKey("profile_ids")
         val profilesInitialized = booleanPreferencesKey("profiles_initialized")
         val telegramEnabled = booleanPreferencesKey("telegram_enabled")
+        val activeEngine = stringPreferencesKey("active_delivery_engine")
         val telegramChatId = stringPreferencesKey("telegram_chat_id")
         val telegramVerified = booleanPreferencesKey("telegram_verified")
         val legacyHost = stringPreferencesKey("smtp_host")

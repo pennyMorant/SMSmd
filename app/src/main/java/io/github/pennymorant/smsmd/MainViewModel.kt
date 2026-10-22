@@ -8,6 +8,7 @@ import io.github.pennymorant.smsmd.core.database.DeliveryLogEntity
 import io.github.pennymorant.smsmd.core.mail.SmtpClient
 import io.github.pennymorant.smsmd.core.settings.AppSettings
 import io.github.pennymorant.smsmd.core.settings.DEFAULT_PROFILE_ID
+import io.github.pennymorant.smsmd.core.settings.DeliveryEngine
 import io.github.pennymorant.smsmd.core.settings.SmtpProfile
 import io.github.pennymorant.smsmd.core.settings.ThemeMode
 import io.github.pennymorant.smsmd.core.settings.telegramReady
@@ -129,6 +130,20 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
+    fun selectTelegram(callback: (String) -> Unit) {
+        viewModelScope.launch {
+            val settings = uiState.value.settings
+            if (!settings.telegramReady) {
+                callback("Test the Telegram configuration before selecting it")
+            } else if (!container.secrets.hasTelegramToken()) {
+                callback("Telegram has no saved bot token")
+            } else {
+                container.settings.setActiveEngine(DeliveryEngine.TELEGRAM)
+                callback("Telegram is now active")
+            }
+        }
+    }
+
     fun deleteProfile(profile: SmtpProfile, callback: (String) -> Unit) {
         viewModelScope.launch {
             container.settings.deleteProfile(profile.id)
@@ -143,8 +158,12 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
             if (enabled) {
                 val smtpReady = profile?.smtpVerified == true && container.secrets.hasSmtpPassword(profile.id)
                 val telegramReady = uiState.value.settings.telegramReady && container.secrets.hasTelegramToken()
-                if (!smtpReady && !telegramReady) {
-                    callback("Test an SMTP or Telegram configuration first")
+                val activeReady = when (uiState.value.settings.activeEngine) {
+                    DeliveryEngine.EMAIL -> smtpReady
+                    DeliveryEngine.TELEGRAM -> telegramReady
+                }
+                if (!activeReady) {
+                    callback("Test and select a delivery configuration first")
                     return@launch
                 }
             }
@@ -173,7 +192,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     }
 
     fun saveTelegram(
-        enabled: Boolean,
         token: String,
         chatId: String,
         callback: (success: Boolean, message: String) -> Unit,
@@ -181,7 +199,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         viewModelScope.launch {
             val startedAt = SystemClock.elapsedRealtime()
             val result = runCatching {
-                if (enabled) validateTelegram(token, chatId)
+                validateTelegram(token, chatId)
                 val settings = uiState.value.settings
                 val savedToken = container.secrets.telegramToken()
                 val tokenChanged = token.trim() != savedToken
@@ -191,7 +209,6 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                     else container.secrets.saveTelegramToken(token.trim())
                 }
                 container.settings.saveTelegram(
-                    enabled = enabled,
                     chatId = chatId,
                     verified = settings.telegramVerified && !tokenChanged && !chatChanged,
                 )
@@ -202,17 +219,17 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
         }
     }
 
-    fun testTelegram(enabled: Boolean, token: String, chatId: String, callback: (String) -> Unit) {
+    fun testTelegram(token: String, chatId: String, callback: (String) -> Unit) {
         viewModelScope.launch {
             telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.TESTING)
             val result = runCatching {
                 validateTelegram(token, chatId)
                 container.secrets.saveTelegramToken(token.trim())
-                container.settings.saveTelegram(enabled, chatId, verified = false)
+                container.settings.saveTelegram(chatId, verified = false)
                 withContext(Dispatchers.IO) {
                     container.telegramClient.sendTest(token.trim(), chatId.trim())
                 }
-                container.settings.saveTelegram(enabled, chatId, verified = true)
+                container.settings.saveTelegram(chatId, verified = true)
             }
             result.onSuccess {
                 telegramTestStatus.value = TelegramTestStatus(TelegramTestPhase.SUCCESS, "Verified")

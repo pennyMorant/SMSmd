@@ -16,10 +16,31 @@ import io.github.pennymorant.smsmd.core.database.ForwardJobEntity
 import io.github.pennymorant.smsmd.core.database.JobState
 import io.github.pennymorant.smsmd.core.mail.SmtpClient
 import io.github.pennymorant.smsmd.core.settings.SettingsRepository
+import io.github.pennymorant.smsmd.core.settings.DeliveryEngine
 import io.github.pennymorant.smsmd.core.settings.telegramReady
 import kotlinx.coroutines.flow.first
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+
+internal data class DeliveryChannels(
+    val smtp: ChannelState,
+    val telegram: ChannelState,
+)
+
+internal fun resolveDeliveryChannels(
+    activeEngine: DeliveryEngine,
+    smtpVerified: Boolean,
+    telegramReady: Boolean,
+): DeliveryChannels = when (activeEngine) {
+    DeliveryEngine.EMAIL -> DeliveryChannels(
+        smtp = if (smtpVerified) ChannelState.PENDING else ChannelState.SKIPPED,
+        telegram = ChannelState.SKIPPED,
+    )
+    DeliveryEngine.TELEGRAM -> DeliveryChannels(
+        smtp = ChannelState.SKIPPED,
+        telegram = if (telegramReady) ChannelState.PENDING else ChannelState.SKIPPED,
+    )
+}
 
 class ForwardRepository(
     context: Context,
@@ -32,9 +53,13 @@ class ForwardRepository(
     suspend fun accept(sender: String, body: String, receivedAt: Long, subscriptionId: Int): Long? {
         val settings = settingsRepository.settings.first()
         val profile = settingsRepository.activeProfile.first()
-        val smtpReady = profile?.smtpVerified == true
-        val telegramReady = settings.telegramReady
-        if (!settings.forwardingEnabled || (!smtpReady && !telegramReady) || body.isBlank()) return null
+        val channels = resolveDeliveryChannels(
+            activeEngine = settings.activeEngine,
+            smtpVerified = profile?.smtpVerified == true,
+            telegramReady = settings.telegramReady,
+        )
+        val deliveryReady = channels.smtp == ChannelState.PENDING || channels.telegram == ChannelState.PENDING
+        if (!settings.forwardingEnabled || !deliveryReady || body.isBlank()) return null
 
         val fingerprint = fingerprint(sender, body, receivedAt, subscriptionId)
         val id = dao.insertJob(
@@ -44,8 +69,8 @@ class ForwardRepository(
                 encryptedBody = crypto.encrypt(body),
                 receivedAt = receivedAt,
                 subscriptionId = subscriptionId,
-                smtpState = if (smtpReady) ChannelState.PENDING.name else ChannelState.SKIPPED.name,
-                telegramState = if (telegramReady) ChannelState.PENDING.name else ChannelState.SKIPPED.name,
+                smtpState = channels.smtp.name,
+                telegramState = channels.telegram.name,
             ),
         )
         if (id > 0) enqueue(id)

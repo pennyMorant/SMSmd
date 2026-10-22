@@ -6,6 +6,8 @@ enum class SmtpProvider { GMAIL, OUTLOOK, CUSTOM }
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
+enum class DeliveryEngine { EMAIL, TELEGRAM }
+
 const val DEFAULT_PROFILE_ID = "default-gmail"
 
 data class SmtpProviderDefaults(
@@ -48,13 +50,13 @@ data class AppSettings(
     val activeProfileId: String = DEFAULT_PROFILE_ID,
     val failureNotifications: Boolean = false,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val telegramEnabled: Boolean = false,
+    val activeEngine: DeliveryEngine = DeliveryEngine.EMAIL,
     val telegramChatId: String = "",
     val telegramVerified: Boolean = false,
 )
 
 val AppSettings.telegramReady: Boolean
-    get() = telegramEnabled && telegramChatId.isNotBlank() && telegramVerified
+    get() = telegramChatId.isNotBlank() && telegramVerified
 
 fun defaultGmailProfile() = SmtpProfile(
     id = DEFAULT_PROFILE_ID,
