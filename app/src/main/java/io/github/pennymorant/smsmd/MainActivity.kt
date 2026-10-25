@@ -77,7 +77,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -121,9 +120,6 @@ class MainActivity : ComponentActivity() {
     private var hasSmsPermission by mutableStateOf(false)
     private var hasNotificationPermission by mutableStateOf(false)
     private var hasBackgroundAccess by mutableStateOf(false)
-    private var hasInstallPermission by mutableStateOf(false)
-    private var pendingInstallRequest by mutableStateOf(false)
-    private var updateSettingsRequest by mutableIntStateOf(0)
 
     private val smsPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -137,17 +133,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        handleUpdateIntent(intent)
         enableEdgeToEdge()
         refreshPermissions()
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
             val updateState by updateViewModel.state.collectAsStateWithLifecycle()
-            LaunchedEffect(updateState, pendingInstallRequest) {
-                if (pendingInstallRequest && updateState is AppUpdateState.ReadyToInstall) {
-                    requestUpdateInstall()
-                }
-            }
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (state.settings.themeMode) {
                 ThemeMode.SYSTEM -> systemDark
@@ -166,9 +156,7 @@ class MainActivity : ComponentActivity() {
                     hasSmsPermission = hasSmsPermission,
                     hasNotificationPermission = hasNotificationPermission,
                     hasBackgroundAccess = hasBackgroundAccess,
-                    hasInstallPermission = hasInstallPermission,
                     updateState = updateState,
-                    updateSettingsRequest = updateSettingsRequest,
                     requestSmsPermission = {
                         smsPermissionLauncher.launch(Manifest.permission.RECEIVE_SMS)
                     },
@@ -176,9 +164,6 @@ class MainActivity : ComponentActivity() {
                         notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                     },
                     changeBackgroundAccess = ::changeBackgroundAccess,
-                    changeInstallPermission = {
-                        openInstallPermissionSettings()
-                    },
                     openSystemSettings = {
                         startActivity(
                             Intent(
@@ -188,24 +173,15 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     checkForUpdate = updateViewModel::checkForUpdate,
-                    installUpdate = ::requestUpdateInstall,
+                    openUpdate = ::openUpdate,
                 )
             }
         }
     }
 
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
-        handleUpdateIntent(intent)
-        updateViewModel.refresh()
-    }
-
     override fun onResume() {
         super.onResume()
         refreshPermissions()
-        updateViewModel.refresh()
-        if (pendingInstallRequest && packageManager.canRequestPackageInstalls()) requestUpdateInstall()
     }
 
     private fun refreshPermissions() {
@@ -219,27 +195,10 @@ class MainActivity : ComponentActivity() {
         ) == PackageManager.PERMISSION_GRANTED
         hasBackgroundAccess = getSystemService(PowerManager::class.java)
             .isIgnoringBatteryOptimizations(packageName)
-        hasInstallPermission = packageManager.canRequestPackageInstalls()
     }
 
-    private fun requestUpdateInstall() {
-        val apkUri = updateViewModel.installationUri() ?: return
-        if (!packageManager.canRequestPackageInstalls()) {
-            pendingInstallRequest = true
-            openInstallPermissionSettings()
-            return
-        }
-        pendingInstallRequest = false
-        runCatching {
-            startActivity(
-                Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(apkUri, APK_MIME_TYPE)
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                },
-            )
-        }.onFailure {
-            updateViewModel.reportFailure("Could not open the system installer")
-        }
+    private fun openUpdate(releaseUrl: String) {
+        startActivity(Intent(Intent.ACTION_VIEW, releaseUrl.toUri()))
     }
 
     @SuppressLint("BatteryLife")
@@ -257,26 +216,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun openInstallPermissionSettings() {
-        startActivity(
-            Intent(
-                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                "package:$packageName".toUri(),
-            ),
-        )
-    }
-
-    private fun handleUpdateIntent(intent: Intent?) {
-        if (intent?.action == ACTION_INSTALL_UPDATE) {
-            updateSettingsRequest += 1
-            pendingInstallRequest = true
-        }
-    }
-
-    companion object {
-        const val ACTION_INSTALL_UPDATE = "io.github.pennymorant.smsmd.action.INSTALL_UPDATE"
-        const val APK_MIME_TYPE = "application/vnd.android.package-archive"
-    }
 }
 
 private enum class AppTab(val label: String, val icon: ImageVector) {
@@ -300,16 +239,13 @@ private fun SmsMdApp(
     hasSmsPermission: Boolean,
     hasNotificationPermission: Boolean,
     hasBackgroundAccess: Boolean,
-    hasInstallPermission: Boolean,
     updateState: AppUpdateState,
-    updateSettingsRequest: Int,
     requestSmsPermission: () -> Unit,
     requestNotificationPermission: () -> Unit,
     changeBackgroundAccess: (Boolean) -> Unit,
-    changeInstallPermission: (Boolean) -> Unit,
     openSystemSettings: () -> Unit,
     checkForUpdate: () -> Unit,
-    installUpdate: () -> Unit,
+    openUpdate: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
@@ -322,10 +258,6 @@ private fun SmsMdApp(
     val showMessage: (String) -> Unit = { message ->
         snackbar.currentSnackbarData?.dismiss()
         scope.launch { snackbar.showSnackbar(message) }
-    }
-
-    LaunchedEffect(updateSettingsRequest) {
-        if (updateSettingsRequest > 0) selectedTab = AppTab.SETTINGS
     }
 
     if (showSmsDisclosure) {
@@ -437,7 +369,6 @@ private fun SmsMdApp(
                     hasSmsPermission = hasSmsPermission,
                     hasNotificationPermission = hasNotificationPermission,
                     hasBackgroundAccess = hasBackgroundAccess,
-                    hasInstallPermission = hasInstallPermission,
                     updateState = updateState,
                     changeSmsPermission = { enabled ->
                         if (enabled) showSmsDisclosure = true else openSystemSettings()
@@ -447,7 +378,6 @@ private fun SmsMdApp(
                         else viewModel.setFailureNotifications(enabled)
                     },
                     changeBackgroundAccess = changeBackgroundAccess,
-                    changeInstallPermission = changeInstallPermission,
                     changeTheme = viewModel::setThemeMode,
                     editProfile = { profile ->
                         viewModel.loadSmtpPassword(profile.id) { password ->
@@ -459,7 +389,7 @@ private fun SmsMdApp(
                     editTelegram = { editingTelegram = true },
                     selectTelegram = { viewModel.selectTelegram(showMessage) },
                     checkForUpdate = checkForUpdate,
-                    installUpdate = installUpdate,
+                    openUpdate = openUpdate,
                 )
             }
         }
@@ -604,12 +534,10 @@ private fun SettingsScreen(
     hasSmsPermission: Boolean,
     hasNotificationPermission: Boolean,
     hasBackgroundAccess: Boolean,
-    hasInstallPermission: Boolean,
     updateState: AppUpdateState,
     changeSmsPermission: (Boolean) -> Unit,
     changeNotifications: (Boolean) -> Unit,
     changeBackgroundAccess: (Boolean) -> Unit,
-    changeInstallPermission: (Boolean) -> Unit,
     changeTheme: (ThemeMode) -> Unit,
     editProfile: (SmtpProfile) -> Unit,
     selectProfile: (SmtpProfile) -> Unit,
@@ -617,7 +545,7 @@ private fun SettingsScreen(
     editTelegram: () -> Unit,
     selectTelegram: () -> Unit,
     checkForUpdate: () -> Unit,
-    installUpdate: () -> Unit,
+    openUpdate: (String) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -647,10 +575,8 @@ private fun SettingsScreen(
         item {
             AppUpdateCard(
                 state = updateState,
-                hasInstallPermission = hasInstallPermission,
-                changeInstallPermission = changeInstallPermission,
                 checkForUpdate = checkForUpdate,
-                installUpdate = installUpdate,
+                openUpdate = openUpdate,
             )
         }
         item {
@@ -934,22 +860,14 @@ private fun TelegramEditor(
 @Composable
 private fun AppUpdateCard(
     state: AppUpdateState,
-    hasInstallPermission: Boolean,
-    changeInstallPermission: (Boolean) -> Unit,
     checkForUpdate: () -> Unit,
-    installUpdate: () -> Unit,
+    openUpdate: (String) -> Unit,
 ) {
     val status = when (state) {
         AppUpdateState.Idle -> "Version ${BuildConfig.VERSION_NAME}"
         AppUpdateState.Checking -> "Checking GitHub Releases"
         is AppUpdateState.UpToDate -> "Version ${state.version} is up to date"
-        is AppUpdateState.Downloading -> listOfNotNull(
-            "Downloading ${state.version}",
-            state.progress?.let { "$it%" },
-            state.detail,
-        ).joinToString(" · ")
-        is AppUpdateState.Verifying -> "Verifying ${state.version}"
-        is AppUpdateState.ReadyToInstall -> "${state.version} is ready to install"
+        is AppUpdateState.UpdateAvailable -> "Version ${state.version} is available"
         is AppUpdateState.Failed -> state.message
     }
     Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
@@ -966,29 +884,15 @@ private fun AppUpdateCard(
                     Text(status, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 when (state) {
-                    AppUpdateState.Checking,
-                    is AppUpdateState.Downloading,
-                    is AppUpdateState.Verifying,
-                    -> CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
-                    is AppUpdateState.ReadyToInstall -> Button(onClick = installUpdate) {
-                        Text("Install")
+                    AppUpdateState.Checking ->
+                        CircularProgressIndicator(Modifier.size(24.dp), strokeWidth = 2.dp)
+                    is AppUpdateState.UpdateAvailable -> Button(onClick = { openUpdate(state.releaseUrl) }) {
+                        Text("View")
                     }
                     else -> OutlinedButton(onClick = checkForUpdate) {
                         Text(if (state is AppUpdateState.Failed) "Try again" else "Check")
                     }
                 }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Install permission", modifier = Modifier.weight(1f))
-                StatusPill(
-                    if (hasInstallPermission) "Ready" else "Required",
-                    if (hasInstallPermission) StatusTone.SUCCESS else StatusTone.WARNING,
-                )
-                Spacer(Modifier.size(10.dp))
-                Switch(
-                    checked = hasInstallPermission,
-                    onCheckedChange = changeInstallPermission,
-                )
             }
         }
     }

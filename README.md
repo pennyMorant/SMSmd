@@ -20,7 +20,7 @@ A small native Android app that forwards incoming SMS messages through one selec
 - Shows only the most recent delivery result
 - Optional failure notifications with a dedicated Android channel
 - In-app request to allow reliable background operation outside battery optimization
-- Checks GitHub Releases in Settings, verifies the APK digest, package, version, and signing certificate, then offers installation
+- Checks GitHub Releases in Settings and opens the verified release page when an update is available
 - Encrypts SMTP passwords, Telegram Bot tokens, queued senders, message bodies, and delivery snapshots with Android Keystore AES-GCM
 - Binds each queued message to the encrypted delivery configuration selected when it was received
 - Removes message content from the local queue after final success or failure
