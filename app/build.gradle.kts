@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-val releaseVersionName = providers.gradleProperty("releaseVersionName").getOrElse("1.2.0")
-val releaseVersionCode = providers.gradleProperty("releaseVersionCode").map(String::toInt).getOrElse(7)
+val releaseVersionName = providers.gradleProperty("releaseVersionName").getOrElse("1.2.1")
+val releaseVersionCode = providers.gradleProperty("releaseVersionCode").map(String::toInt).getOrElse(8)
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
