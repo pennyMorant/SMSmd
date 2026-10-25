@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import android.util.Log
 import io.github.pennymorant.smsmd.SmsMdApplication
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -15,18 +16,24 @@ class SmsReceiver : BroadcastReceiver() {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
         val sms = SmsParser.parse(intent) ?: return
         val pendingResult = goAsync()
-        val container = (context.applicationContext as SmsMdApplication).container
+        val application = context.applicationContext as SmsMdApplication
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
-                container.forwardRepository.accept(
+                application.container.forwardRepository.enqueueIncoming(
                     sms.sender,
                     sms.body,
                     sms.receivedAt,
                     sms.subscriptionId,
                 )
+            } catch (error: Throwable) {
+                Log.e(TAG, "Could not persist incoming SMS for forwarding", error)
             } finally {
                 pendingResult.finish()
             }
         }
+    }
+
+    private companion object {
+        const val TAG = "SmsReceiver"
     }
 }

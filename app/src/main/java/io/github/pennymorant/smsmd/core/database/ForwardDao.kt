@@ -26,6 +26,9 @@ interface ForwardDao {
     @Query("SELECT COUNT(*) FROM forward_jobs WHERE state IN ('QUEUED', 'SENDING', 'RETRYING')")
     fun pendingCount(): Flow<Int>
 
+    @Query("SELECT * FROM forward_jobs WHERE state IN ('QUEUED', 'SENDING', 'RETRYING') ORDER BY createdAt")
+    suspend fun pendingJobs(): List<ForwardJobEntity>
+
     @Insert
     suspend fun insertLog(log: DeliveryLogEntity)
 

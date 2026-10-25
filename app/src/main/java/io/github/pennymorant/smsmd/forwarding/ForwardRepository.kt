@@ -52,6 +52,24 @@ class ForwardRepository(
 ) {
     private val workManager = WorkManager.getInstance(context)
 
+    fun enqueueIncoming(sender: String, body: String, receivedAt: Long, subscriptionId: Int) {
+        val fingerprint = fingerprint(sender, body, receivedAt, subscriptionId)
+        val request = OneTimeWorkRequestBuilder<SmsIntakeWorker>()
+            .setInputData(
+                workDataOf(
+                    SmsIntakeWorker.ENCRYPTED_SENDER to crypto.encrypt(sender),
+                    SmsIntakeWorker.ENCRYPTED_BODY to crypto.encrypt(body),
+                    SmsIntakeWorker.RECEIVED_AT to receivedAt,
+                    SmsIntakeWorker.SUBSCRIPTION_ID to subscriptionId,
+                ),
+            )
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .addTag("sms-intake")
+            .build()
+        workManager.enqueueUniqueWork("intake-sms-$fingerprint", ExistingWorkPolicy.KEEP, request)
+            .result.get(INTAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    }
+
     suspend fun accept(sender: String, body: String, receivedAt: Long, subscriptionId: Int): Long? {
         val settings = settingsRepository.settings.first()
         val profile = settingsRepository.activeProfile.first()
@@ -96,6 +114,10 @@ class ForwardRepository(
         workManager.enqueueUniqueWork("send-sms-$jobId", ExistingWorkPolicy.KEEP, request)
     }
 
+    suspend fun recoverPendingJobs() {
+        dao.pendingJobs().forEach { enqueue(it.id) }
+    }
+
     suspend fun markCompleted(
         job: ForwardJobEntity,
         attempt: Int,
@@ -135,5 +157,9 @@ class ForwardRepository(
         val raw = "$sender\u0000$body\u0000$timeBucket\u0000$subscriptionId"
         return MessageDigest.getInstance("SHA-256").digest(raw.toByteArray())
             .joinToString("") { "%02x".format(it) }
+    }
+
+    private companion object {
+        const val INTAKE_TIMEOUT_SECONDS = 8L
     }
 }

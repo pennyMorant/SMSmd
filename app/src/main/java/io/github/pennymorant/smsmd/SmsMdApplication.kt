@@ -29,6 +29,7 @@ class SmsMdApplication : Application() {
         applicationScope.launch {
             container.database.forwardDao().trimLogsToLatest()
             container.database.forwardDao().deleteFailedJobs()
+            container.forwardRepository.recoverPendingJobs()
         }
     }
 }
