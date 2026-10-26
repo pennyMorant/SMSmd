@@ -475,7 +475,11 @@ private fun HomeScreen(
             SummaryCard(
                 title = "Last delivery",
                 detail = last?.let {
-                    "${it.channelSummary}\n${DateFormat.getDateTimeInstance().format(Date(it.completedAt))}"
+                    buildList {
+                        add(it.channelSummary)
+                        it.errorSummary?.takeIf(String::isNotBlank)?.let(::add)
+                        add(DateFormat.getDateTimeInstance().format(Date(it.completedAt)))
+                    }.joinToString("\n")
                 }
                     ?: "No delivery yet",
                 trailing = {

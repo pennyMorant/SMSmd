@@ -54,11 +54,6 @@ class SettingsRepository(private val context: Context) {
             values[stringKey(profile.id, "recipients")] = profile.recipientAddresses.trim()
             values[booleanKey(profile.id, "verified")] = profile.smtpVerified
             if (values[Keys.activeProfileId].isNullOrBlank()) values[Keys.activeProfileId] = profile.id
-            if (values[Keys.activeProfileId] == profile.id &&
-                activeEngine(values) == DeliveryEngine.EMAIL && !profile.smtpVerified
-            ) {
-                values[Keys.enabled] = false
-            }
         }
     }
 
@@ -104,9 +99,6 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit {
             it[Keys.telegramChatId] = chatId.trim()
             it[Keys.telegramVerified] = verified
-            if (activeEngine(it) == DeliveryEngine.TELEGRAM && !verified) {
-                it[Keys.enabled] = false
-            }
         }
     }
 
