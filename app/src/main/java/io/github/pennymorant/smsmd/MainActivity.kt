@@ -13,6 +13,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
@@ -34,6 +35,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.Delete
@@ -41,6 +43,7 @@ import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Email
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Settings
@@ -110,6 +113,8 @@ import java.util.Date
 import java.util.UUID
 import kotlinx.coroutines.launch
 
+private const val PROJECT_URL = "https://github.com/pennyMorant/SMSmd"
+
 class MainActivity : ComponentActivity() {
     private val viewModel by viewModels<MainViewModel> {
         MainViewModel.Factory((application as SmsMdApplication).container)
@@ -173,7 +178,7 @@ class MainActivity : ComponentActivity() {
                         )
                     },
                     checkForUpdate = updateViewModel::checkForUpdate,
-                    openUpdate = ::openUpdate,
+                    openUrl = ::openUrl,
                 )
             }
         }
@@ -197,8 +202,8 @@ class MainActivity : ComponentActivity() {
             .isIgnoringBatteryOptimizations(packageName)
     }
 
-    private fun openUpdate(releaseUrl: String) {
-        startActivity(Intent(Intent.ACTION_VIEW, releaseUrl.toUri()))
+    private fun openUrl(url: String) {
+        startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
     }
 
     @SuppressLint("BatteryLife")
@@ -245,7 +250,7 @@ private fun SmsMdApp(
     changeBackgroundAccess: (Boolean) -> Unit,
     openSystemSettings: () -> Unit,
     checkForUpdate: () -> Unit,
-    openUpdate: (String) -> Unit,
+    openUrl: (String) -> Unit,
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
@@ -389,7 +394,7 @@ private fun SmsMdApp(
                     editTelegram = { editingTelegram = true },
                     selectTelegram = { viewModel.selectTelegram(showMessage) },
                     checkForUpdate = checkForUpdate,
-                    openUpdate = openUpdate,
+                    openUrl = openUrl,
                 )
             }
         }
@@ -549,7 +554,7 @@ private fun SettingsScreen(
     editTelegram: () -> Unit,
     selectTelegram: () -> Unit,
     checkForUpdate: () -> Unit,
-    openUpdate: (String) -> Unit,
+    openUrl: (String) -> Unit,
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -580,7 +585,7 @@ private fun SettingsScreen(
             AppUpdateCard(
                 state = updateState,
                 checkForUpdate = checkForUpdate,
-                openUpdate = openUpdate,
+                openUpdate = openUrl,
             )
         }
         item {
@@ -640,6 +645,48 @@ private fun SettingsScreen(
                 edit = { editProfile(profile) },
                 delete = { deleteProfile(profile) },
             )
+        }
+        item {
+            AboutCard(openProject = { openUrl(PROJECT_URL) })
+        }
+    }
+}
+
+@Composable
+private fun AboutCard(openProject: () -> Unit) {
+    Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.medium) {
+        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Icon(Icons.Outlined.Info, contentDescription = null)
+                Column(Modifier.weight(1f)) {
+                    Text("About", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Version ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            HorizontalDivider(Modifier.padding(start = 52.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clickable(onClick = openProject)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Project")
+                    Text(
+                        "github.com/pennyMorant/SMSmd",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open project")
+            }
         }
     }
 }
