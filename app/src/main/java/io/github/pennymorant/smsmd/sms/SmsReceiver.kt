@@ -19,6 +19,7 @@ class SmsReceiver : BroadcastReceiver() {
         val application = context.applicationContext as SmsMdApplication
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
+                application.container.forwardRepository.recoverPendingJobs()
                 application.container.forwardRepository.enqueueIncoming(
                     sms.sender,
                     sms.body,

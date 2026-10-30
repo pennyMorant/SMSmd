@@ -56,12 +56,13 @@ data class MainUiState(
 class MainViewModel(private val container: AppContainer) : ViewModel() {
     private val testStatus = MutableStateFlow(SmtpTestStatus())
     private val telegramTestStatus = MutableStateFlow(TelegramTestStatus())
+    private val forwardDao = container.database.forwardDao()
 
     private val baseUiState = combine(
         container.settings.settings,
         container.settings.profiles,
-        container.database.forwardDao().pendingCount(),
-        container.database.forwardDao().observeLastDelivery(),
+        forwardDao.pendingCount(),
+        forwardDao.observeLastDelivery(),
         testStatus,
     ) { settings, profiles, pending, lastDelivery, currentTest ->
         MainUiState(
@@ -80,6 +81,14 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
     val uiState: StateFlow<MainUiState> = combine(baseUiState, telegramTestStatus) { state, telegramTest ->
         state.copy(telegramTestStatus = telegramTest)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), MainUiState())
+
+    init {
+        viewModelScope.launch(Dispatchers.IO) {
+            forwardDao.trimLogsToLatest()
+            forwardDao.deleteFailedJobs()
+            container.forwardRepository.recoverPendingJobs()
+        }
+    }
 
     fun saveProfile(
         profile: SmtpProfile,

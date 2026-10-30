@@ -105,6 +105,7 @@ import io.github.pennymorant.smsmd.core.settings.DeliveryEngine
 import io.github.pennymorant.smsmd.core.settings.defaults
 import io.github.pennymorant.smsmd.core.telegram.TelegramChat
 import io.github.pennymorant.smsmd.core.telegram.TelegramClient
+import io.github.pennymorant.smsmd.forwarding.ForwardingService
 import io.github.pennymorant.smsmd.update.AppUpdateState
 import io.github.pennymorant.smsmd.update.AppUpdateViewModel
 import io.github.pennymorant.smsmd.ui.theme.SmsMdTheme
@@ -143,6 +144,9 @@ class MainActivity : ComponentActivity() {
         setContent {
             val state by viewModel.uiState.collectAsStateWithLifecycle()
             val updateState by updateViewModel.state.collectAsStateWithLifecycle()
+            LaunchedEffect(state.settings.forwardingEnabled) {
+                ForwardingService.update(this@MainActivity, state.settings.forwardingEnabled)
+            }
             val systemDark = isSystemInDarkTheme()
             val darkTheme = when (state.settings.themeMode) {
                 ThemeMode.SYSTEM -> systemDark
