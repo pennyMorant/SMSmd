@@ -9,52 +9,57 @@ import io.github.pennymorant.smsmd.core.database.JobState
 import io.github.pennymorant.smsmd.core.mail.SmtpClient
 import io.github.pennymorant.smsmd.core.telegram.TelegramApiException
 import io.github.pennymorant.smsmd.core.telegram.TelegramClient
-import jakarta.mail.AuthenticationFailedException
-import jakarta.mail.SendFailedException
-import java.security.cert.CertificateException
-import javax.net.ssl.SSLHandshakeException
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import org.eclipse.angus.mail.smtp.SMTPAddressFailedException
-import org.eclipse.angus.mail.smtp.SMTPSendFailedException
 
 class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
-    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+    override suspend fun doWork(): Result = DeliveryExecutionGate.run {
+        withContext(Dispatchers.IO) { deliver() }
+    }
+
+    private suspend fun deliver(): Result {
         val jobId = inputData.getLong(JOB_ID, -1)
-        if (jobId <= 0) return@withContext Result.failure()
+        if (jobId <= 0) return Result.failure()
         val container = (applicationContext as SmsMdApplication).container
-        val job = container.database.forwardDao().getJob(jobId) ?: return@withContext Result.success()
+        val dao = container.database.forwardDao()
+        val job = dao.getJob(jobId) ?: return Result.success()
         val attempt = runAttemptCount + 1
         suspend fun failQueuedMessage(message: String): Result {
-            container.forwardRepository.markUndeliverable(job, attempt, message)
-            if (container.settings.settings.first().failureNotifications) {
-                container.failureNotifier.show(job.id, message)
+            withContext(NonCancellable) {
+                container.forwardRepository.markUndeliverable(job, attempt, message)
+                if (container.settings.settings.first().failureNotifications) {
+                    container.failureNotifier.show(job.id, message)
+                }
             }
             return Result.failure()
         }
         val sender = try {
             container.crypto.decrypt(job.encryptedSender)
         } catch (_: Throwable) {
-            return@withContext failQueuedMessage("Stored sender could not be decrypted")
+            return failQueuedMessage("Stored sender could not be decrypted")
         }
         val body = try {
             container.crypto.decrypt(job.encryptedBody)
         } catch (_: Throwable) {
-            return@withContext failQueuedMessage("Stored message could not be decrypted")
+            return failQueuedMessage("Stored message could not be decrypted")
         }
         val snapshot = try {
             job.encryptedDeliveryConfig?.let {
                 DeliverySnapshotCodec.decode(container.crypto.decrypt(it))
             }
         } catch (_: Throwable) {
-            return@withContext failQueuedMessage("Stored delivery configuration could not be decrypted")
+            return failQueuedMessage("Stored delivery configuration could not be decrypted")
         }
         val errors = linkedSetOf<String>()
         job.lastError?.takeIf(String::isNotBlank)?.let(errors::add)
         var smtpState = enumValueOrDefault(job.smtpState, ChannelState.PENDING)
         var telegramState = enumValueOrDefault(job.telegramState, ChannelState.SKIPPED)
-        container.database.forwardDao().updateJob(job.id, JobState.SENDING.name, attempt)
+        dao.updateJob(job.id, JobState.SENDING.name, attempt)
 
         if (smtpState == ChannelState.PENDING) {
             try {
@@ -76,13 +81,18 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     job.receivedAt,
                 )
                 smtpState = ChannelState.SENT
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 errors += "Email: ${SmtpClient.safeError(error)}"
-                if (error.isPermanentSmtpFailure() || attempt >= MAX_ATTEMPTS) {
+                if (isPermanentSmtpFailure(error) || attempt >= MAX_ATTEMPTS) {
                     smtpState = ChannelState.FAILED
                 }
             }
-            container.database.forwardDao().updateChannelStates(job.id, smtpState.name, telegramState.name)
+            withContext(NonCancellable) {
+                dao.updateChannelStates(job.id, smtpState.name, telegramState.name)
+            }
+            currentCoroutineContext().ensureActive()
         }
 
         if (telegramState == ChannelState.PENDING) {
@@ -103,6 +113,8 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     job.receivedAt,
                 )
                 telegramState = ChannelState.SENT
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 errors += "Telegram: ${TelegramClient.safeError(error)}"
                 if ((error as? TelegramApiException)?.permanent == true ||
@@ -111,18 +123,21 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     telegramState = ChannelState.FAILED
                 }
             }
-            container.database.forwardDao().updateChannelStates(job.id, smtpState.name, telegramState.name)
+            withContext(NonCancellable) {
+                dao.updateChannelStates(job.id, smtpState.name, telegramState.name)
+            }
+            currentCoroutineContext().ensureActive()
         }
 
         val errorSummary = errors.joinToString(" · ").take(360).ifBlank { null }
         if (smtpState == ChannelState.PENDING || telegramState == ChannelState.PENDING) {
-            container.database.forwardDao().updateJob(
+            dao.updateJob(
                 job.id,
                 JobState.RETRYING.name,
                 attempt,
                 errorSummary,
             )
-            return@withContext Result.retry()
+            return Result.retry()
         }
 
         val requested = listOf(smtpState, telegramState).filter { it != ChannelState.SKIPPED }
@@ -132,22 +147,25 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
             sentCount == 0 -> JobState.FAILED.name
             else -> PARTIAL_RESULT
         }
+        val finalErrorSummary = errorSummary.takeUnless { result == JobState.SENT.name }
         val channelSummary = buildList {
             if (smtpState != ChannelState.SKIPPED) add("Email ${smtpState.label()}")
             if (telegramState != ChannelState.SKIPPED) add("Telegram ${telegramState.label()}")
         }.joinToString(" · ")
-        container.forwardRepository.markCompleted(
-            job,
-            attempt,
-            sender,
-            result,
-            channelSummary,
-            errorSummary,
-        )
-        if (result != JobState.SENT.name && container.settings.settings.first().failureNotifications) {
-            container.failureNotifier.show(job.id, errorSummary ?: channelSummary)
+        withContext(NonCancellable) {
+            container.forwardRepository.markCompleted(
+                job,
+                attempt,
+                sender,
+                result,
+                channelSummary,
+                finalErrorSummary,
+            )
+            if (result != JobState.SENT.name && container.settings.settings.first().failureNotifications) {
+                container.failureNotifier.show(job.id, finalErrorSummary ?: channelSummary)
+            }
         }
-        if (result == JobState.FAILED.name) Result.failure() else Result.success()
+        return if (result == JobState.FAILED.name) Result.failure() else Result.success()
     }
 
     private fun ChannelState.label() = when (this) {
@@ -155,33 +173,6 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         ChannelState.FAILED -> "failed"
         ChannelState.PENDING -> "pending"
         ChannelState.SKIPPED -> "off"
-    }
-
-    private inline fun <reified T : Throwable> Throwable.hasCause(): Boolean {
-        var current: Throwable? = this
-        while (current != null) {
-            if (current is T) return true
-            current = current.cause
-        }
-        return false
-    }
-
-    private fun Throwable.isPermanentSmtpFailure(): Boolean {
-        if (this is AuthenticationFailedException || this is SendFailedException ||
-            this is IllegalArgumentException || hasCause<SSLHandshakeException>() ||
-            hasCause<CertificateException>()
-        ) return true
-        var current: Throwable? = this
-        while (current != null) {
-            val code = when (current) {
-                is SMTPAddressFailedException -> current.returnCode
-                is SMTPSendFailedException -> current.returnCode
-                else -> null
-            }
-            if (code != null && code >= 500) return true
-            current = current.cause
-        }
-        return false
     }
 
     private inline fun <reified T : Enum<T>> enumValueOrDefault(raw: String, default: T): T =

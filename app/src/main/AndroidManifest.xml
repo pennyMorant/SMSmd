@@ -52,7 +52,6 @@
             android:name=".forwarding.ForwardingService"
             android:exported="false"
             android:foregroundServiceType="remoteMessaging"
-            android:process=":keepalive"
             android:stopWithTask="false" />
     </application>
 </manifest>
