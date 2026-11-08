@@ -1,6 +1,7 @@
 package io.github.pennymorant.smsmd.forwarding
 
 import android.content.Context
+import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
@@ -51,26 +52,8 @@ class ForwardRepository(
     private val crypto: CryptoManager,
     private val secrets: SecretStore,
 ) {
-    private val workManager = WorkManager.getInstance(context)
-
-    fun enqueueIncoming(sender: String, body: String, receivedAt: Long, subscriptionId: Int) {
-        val fingerprint = fingerprint(sender, body, receivedAt, subscriptionId)
-        val request = OneTimeWorkRequestBuilder<SmsIntakeWorker>()
-            .setInputData(
-                workDataOf(
-                    SmsIntakeWorker.ENCRYPTED_SENDER to crypto.encrypt(sender),
-                    SmsIntakeWorker.ENCRYPTED_BODY to crypto.encrypt(body),
-                    SmsIntakeWorker.RECEIVED_AT to receivedAt,
-                    SmsIntakeWorker.SUBSCRIPTION_ID to subscriptionId,
-                ),
-            )
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-            .addTag("sms-intake")
-            .build()
-        workManager.enqueueUniqueWork("intake-sms-$fingerprint", ExistingWorkPolicy.KEEP, request)
-            .result.get(INTAKE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-    }
+    private val applicationContext = context.applicationContext
+    private val workManager = WorkManager.getInstance(applicationContext)
 
     suspend fun accept(sender: String, body: String, receivedAt: Long, subscriptionId: Int): Long? {
         val settings = settingsRepository.settings.first()
@@ -142,6 +125,11 @@ class ForwardRepository(
             ),
         )
         dao.deleteJob(job.id)
+        if (result == JobState.SENT.name) {
+            runCatching { settingsRepository.incrementForwardedCount() }
+                .onSuccess { count -> ForwardingService.updateCount(applicationContext, count) }
+                .onFailure { error -> Log.w(TAG, "Could not update the forwarded count", error) }
+        }
     }
 
     suspend fun markUndeliverable(job: ForwardJobEntity, attempt: Int, error: String) {
@@ -163,6 +151,6 @@ class ForwardRepository(
     }
 
     private companion object {
-        const val INTAKE_TIMEOUT_SECONDS = 8L
+        const val TAG = "ForwardRepository"
     }
 }

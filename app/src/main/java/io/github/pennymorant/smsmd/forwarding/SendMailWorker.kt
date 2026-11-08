@@ -1,6 +1,7 @@
 package io.github.pennymorant.smsmd.forwarding
 
 import android.content.Context
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import io.github.pennymorant.smsmd.SmsMdApplication
@@ -29,6 +30,7 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val dao = container.database.forwardDao()
         val job = dao.getJob(jobId) ?: return Result.success()
         val attempt = runAttemptCount + 1
+        Log.i(TAG, "Starting queued delivery attempt $attempt")
         suspend fun failQueuedMessage(message: String): Result {
             withContext(NonCancellable) {
                 container.forwardRepository.markUndeliverable(job, attempt, message)
@@ -165,6 +167,7 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                 container.failureNotifier.show(job.id, finalErrorSummary ?: channelSummary)
             }
         }
+        Log.i(TAG, "Queued delivery finished with $result")
         return if (result == JobState.FAILED.name) Result.failure() else Result.success()
     }
 
@@ -179,6 +182,7 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         runCatching { enumValueOf<T>(raw) }.getOrDefault(default)
 
     companion object {
+        private const val TAG = "SendMailWorker"
         const val JOB_ID = "job_id"
         const val PARTIAL_RESULT = "PARTIAL"
         private const val MAX_ATTEMPTS = 8

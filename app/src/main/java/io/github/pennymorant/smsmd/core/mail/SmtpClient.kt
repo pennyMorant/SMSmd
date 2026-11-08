@@ -105,8 +105,26 @@ class SmtpClient {
             val received = DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT)
                 .format(Date(receivedAt))
             val safeSender = escapeHtml(sender)
-            val safeBody = escapeHtml(body)
             val safeReceived = escapeHtml(received)
+            val numbers = numericTokens(body)
+            val highlightedBody = highlightNumbers(body)
+            val plainNumberSummary = numbers.takeIf { it.isNotEmpty() }
+                ?.joinToString(prefix = "Numbers: ", separator = " | ")
+                .orEmpty()
+            val numberSection = numbers.takeIf { it.isNotEmpty() }?.joinToString(
+                prefix = """
+                    <div style="margin-top:22px;padding:16px 18px;background:#e6f4ea;border:1px solid #b8ddc4;border-radius:8px;">
+                      <div style="margin-bottom:10px;color:#42604d;font-size:12px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;">Numbers</div>
+                """.trimIndent(),
+                postfix = "</div>",
+                separator = "",
+            ) { number ->
+                """
+                    <div style="margin:6px 0;padding:10px 12px;background:#ffffff;border-radius:6px;">
+                      <code style="font-family:Roboto Mono,Consolas,monospace;font-size:22px;font-weight:700;line-height:1.3;letter-spacing:1.5px;color:#173d2a;user-select:all;">${escapeHtml(number)}</code>
+                    </div>
+                """.trimIndent()
+            }.orEmpty()
             return EmailContent(
                 subject = "SMS from ${maskSender(sender)}",
                 plainText = """
@@ -114,6 +132,7 @@ class SmtpClient {
 
                     From: $sender
                     Received: $received
+                    $plainNumberSummary
 
                     $body
 
@@ -139,7 +158,8 @@ class SmtpClient {
                                 <td style="padding:0;">$safeReceived</td>
                               </tr>
                             </table>
-                            <div style="margin-top:22px;padding:18px;background:#f0f5f2;border-radius:8px;font-size:17px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">$safeBody</div>
+                            $numberSection
+                            <div style="margin-top:22px;padding:18px;background:#f0f5f2;border-radius:8px;font-size:17px;line-height:1.6;white-space:pre-wrap;word-break:break-word;">$highlightedBody</div>
                           </div>
                           <div style="padding:14px 28px;background:#f8faf9;color:#758079;font-size:12px;">Forwarded by SMSmd</div>
                         </div>
@@ -164,6 +184,27 @@ class SmtpClient {
             }
         }
 
+        internal fun numericTokens(value: String): List<String> = NUMBER_PATTERN.findAll(value)
+            .map { it.value.trim().replace(WHITESPACE_PATTERN, " ") }
+            .filter { token -> token.count(Char::isDigit) >= 2 }
+            .distinct()
+            .toList()
+
+        internal fun highlightNumbers(value: String): String = buildString(value.length + 64) {
+            var cursor = 0
+            NUMBER_PATTERN.findAll(value).forEach { match ->
+                append(escapeHtml(value.substring(cursor, match.range.first)))
+                append(
+                    "<span style=\"font-family:Roboto Mono,Consolas,monospace;" +
+                        "font-weight:700;letter-spacing:.8px;color:#173d2a;\">",
+                )
+                append(escapeHtml(match.value))
+                append("</span>")
+                cursor = match.range.last + 1
+            }
+            append(escapeHtml(value.substring(cursor)))
+        }
+
         fun maskSender(sender: String): String {
             if (sender.length <= 4) return sender
             return sender.take(2) + "*".repeat((sender.length - 4).coerceAtMost(6)) + sender.takeLast(2)
@@ -174,6 +215,11 @@ class SmtpClient {
             is IllegalArgumentException -> error.message?.take(160) ?: "Invalid configuration"
             else -> "Network or mail server error"
         }
+
+        private val NUMBER_PATTERN = Regex(
+            """(?<![\p{L}\p{N}])\+?\d(?:[\d\s().:/-]*\d)?(?![\p{L}\p{N}])""",
+        )
+        private val WHITESPACE_PATTERN = Regex("""\s+""")
     }
 }
 

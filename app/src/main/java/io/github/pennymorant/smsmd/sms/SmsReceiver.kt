@@ -20,12 +20,13 @@ class SmsReceiver : BroadcastReceiver() {
         CoroutineScope(SupervisorJob() + Dispatchers.IO).launch {
             try {
                 application.container.forwardRepository.recoverPendingJobs()
-                application.container.forwardRepository.enqueueIncoming(
+                val jobId = application.container.forwardRepository.accept(
                     sms.sender,
                     sms.body,
                     sms.receivedAt,
                     sms.subscriptionId,
                 )
+                Log.i(TAG, if (jobId == null) "Incoming SMS ignored by configuration" else "Incoming SMS queued")
             } catch (error: Throwable) {
                 Log.e(TAG, "Could not persist incoming SMS for forwarding", error)
             } finally {

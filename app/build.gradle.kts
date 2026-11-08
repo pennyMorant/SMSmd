@@ -1,7 +1,7 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
-val releaseVersionName = providers.gradleProperty("releaseVersionName").getOrElse("1.2.6")
-val releaseVersionCode = providers.gradleProperty("releaseVersionCode").map(String::toInt).getOrElse(13)
+val releaseVersionName = providers.gradleProperty("releaseVersionName").getOrElse("1.2.7")
+val releaseVersionCode = providers.gradleProperty("releaseVersionCode").map(String::toInt).getOrElse(14)
 val releaseKeystorePath = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val releaseKeystorePassword = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
@@ -26,7 +26,7 @@ android {
     defaultConfig {
         applicationId = "io.github.pennymorant.smsmd"
         minSdk = 33
-        targetSdk = 37
+        targetSdk = 36
         versionCode = releaseVersionCode
         versionName = releaseVersionName
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
