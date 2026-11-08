@@ -241,6 +241,12 @@ private data class ProfileEditorState(
     val password: String,
 )
 
+private sealed interface ConfigurationSheet {
+    data object TypePicker : ConfigurationSheet
+    data class Smtp(val editor: ProfileEditorState) : ConfigurationSheet
+    data object Telegram : ConfigurationSheet
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmsMdApp(
@@ -259,9 +265,8 @@ private fun SmsMdApp(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
     var showSmsDisclosure by rememberSaveable { mutableStateOf(false) }
-    var showProfileTypePicker by rememberSaveable { mutableStateOf(false) }
-    var editingTelegram by rememberSaveable { mutableStateOf(false) }
-    var editingProfile by remember { mutableStateOf<ProfileEditorState?>(null) }
+    var configurationSheet by remember { mutableStateOf<ConfigurationSheet?>(null) }
+    val configurationSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val showMessage: (String) -> Unit = { message ->
@@ -279,56 +284,38 @@ private fun SmsMdApp(
         )
     }
 
-    editingProfile?.let { editorState ->
+    configurationSheet?.let { sheet ->
         ModalBottomSheet(
-            onDismissRequest = { editingProfile = null },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            sheetGesturesEnabled = false,
-            dragHandle = null,
+            onDismissRequest = { configurationSheet = null },
+            sheetState = configurationSheetState,
         ) {
-            ProfileEditor(
-                initial = editorState.profile,
-                initialPassword = editorState.password,
-                testStatus = state.testStatus,
-                save = viewModel::saveProfile,
-                test = { draft, password -> viewModel.testProfile(draft, password, showMessage) },
-            )
-        }
-    }
+            when (sheet) {
+                ConfigurationSheet.TypePicker -> DeliveryTypePicker(
+                    selectEmail = {
+                        configurationSheet = ConfigurationSheet.Smtp(
+                            ProfileEditorState(newProfile(SmtpProvider.GMAIL), ""),
+                        )
+                    },
+                    selectTelegram = { configurationSheet = ConfigurationSheet.Telegram },
+                )
 
-    if (showProfileTypePicker) {
-        ModalBottomSheet(
-            onDismissRequest = { showProfileTypePicker = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        ) {
-            DeliveryTypePicker(
-                selectEmail = {
-                    showProfileTypePicker = false
-                    editingProfile = ProfileEditorState(newProfile(SmtpProvider.GMAIL), "")
-                },
-                selectTelegram = {
-                    showProfileTypePicker = false
-                    editingTelegram = true
-                },
-            )
-        }
-    }
+                is ConfigurationSheet.Smtp -> ProfileEditor(
+                    initial = sheet.editor.profile,
+                    initialPassword = sheet.editor.password,
+                    testStatus = state.testStatus,
+                    save = viewModel::saveProfile,
+                    test = { draft, password -> viewModel.testProfile(draft, password, showMessage) },
+                )
 
-    if (editingTelegram) {
-        ModalBottomSheet(
-            onDismissRequest = { editingTelegram = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            sheetGesturesEnabled = false,
-            dragHandle = null,
-        ) {
-            TelegramEditor(
-                settings = state.settings,
-                testStatus = state.telegramTestStatus,
-                loadToken = viewModel::loadTelegramToken,
-                save = viewModel::saveTelegram,
-                test = { token, chatId -> viewModel.testTelegram(token, chatId, showMessage) },
-                detectChats = viewModel::detectTelegramChats,
-            )
+                ConfigurationSheet.Telegram -> TelegramEditor(
+                    settings = state.settings,
+                    testStatus = state.telegramTestStatus,
+                    loadToken = viewModel::loadTelegramToken,
+                    save = viewModel::saveTelegram,
+                    test = { token, chatId -> viewModel.testTelegram(token, chatId, showMessage) },
+                    detectChats = viewModel::detectTelegramChats,
+                )
+            }
         }
     }
 
@@ -338,7 +325,7 @@ private fun SmsMdApp(
         floatingActionButton = {
             if (selectedTab == AppTab.SETTINGS) {
                 FloatingActionButton(
-                    onClick = { showProfileTypePicker = true },
+                    onClick = { configurationSheet = ConfigurationSheet.TypePicker },
                 ) {
                     Icon(Icons.Outlined.Add, contentDescription = "Add delivery profile")
                 }
@@ -390,12 +377,12 @@ private fun SmsMdApp(
                     changeTheme = viewModel::setThemeMode,
                     editProfile = { profile ->
                         viewModel.loadSmtpPassword(profile.id) { password ->
-                            editingProfile = ProfileEditorState(profile, password)
+                            configurationSheet = ConfigurationSheet.Smtp(ProfileEditorState(profile, password))
                         }
                     },
                     selectProfile = { viewModel.selectProfile(it, showMessage) },
                     deleteProfile = { viewModel.deleteProfile(it, showMessage) },
-                    editTelegram = { editingTelegram = true },
+                    editTelegram = { configurationSheet = ConfigurationSheet.Telegram },
                     selectTelegram = { viewModel.selectTelegram(showMessage) },
                     checkForUpdate = checkForUpdate,
                     openUrl = openUrl,
@@ -681,6 +668,7 @@ private fun AboutCard(openProject: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
             ) {
+                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = null)
                 Column(Modifier.weight(1f)) {
                     Text("Project")
                     Text(
@@ -689,7 +677,6 @@ private fun AboutCard(openProject: () -> Unit) {
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
-                Icon(Icons.AutoMirrored.Outlined.OpenInNew, contentDescription = "Open project")
             }
         }
     }
