@@ -4,6 +4,7 @@ import androidx.room3.Dao
 import androidx.room3.Insert
 import androidx.room3.OnConflictStrategy
 import androidx.room3.Query
+import androidx.room3.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -37,6 +38,12 @@ interface ForwardDao {
 
     @Query("DELETE FROM delivery_logs")
     suspend fun clearLogs()
+
+    @Transaction
+    suspend fun replaceWithLog(log: DeliveryLogEntity) {
+        clearLogs()
+        insertLog(log)
+    }
 
     @Query("DELETE FROM delivery_logs WHERE id NOT IN (SELECT id FROM delivery_logs ORDER BY completedAt DESC LIMIT 1)")
     suspend fun trimLogsToLatest()

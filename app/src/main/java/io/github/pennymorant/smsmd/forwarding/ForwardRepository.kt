@@ -112,8 +112,7 @@ class ForwardRepository(
         channelSummary: String,
         error: String?,
     ) {
-        dao.clearLogs()
-        dao.insertLog(
+        dao.replaceWithLog(
             DeliveryLogEntity(
                 jobId = job.id,
                 maskedSender = SmtpClient.maskSender(sender),

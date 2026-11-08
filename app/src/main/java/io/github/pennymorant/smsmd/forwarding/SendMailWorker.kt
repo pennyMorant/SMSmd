@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -61,6 +62,7 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         job.lastError?.takeIf(String::isNotBlank)?.let(errors::add)
         var smtpState = enumValueOrDefault(job.smtpState, ChannelState.PENDING)
         var telegramState = enumValueOrDefault(job.telegramState, ChannelState.SKIPPED)
+        var telegramRetryAfter: Int? = null
         dao.updateJob(job.id, JobState.SENDING.name, attempt)
 
         if (smtpState == ChannelState.PENDING) {
@@ -123,6 +125,8 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     error is IllegalArgumentException || attempt >= MAX_ATTEMPTS
                 ) {
                     telegramState = ChannelState.FAILED
+                } else {
+                    telegramRetryAfter = (error as? TelegramApiException)?.retryAfterSeconds
                 }
             }
             withContext(NonCancellable) {
@@ -133,6 +137,10 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
         val errorSummary = errors.joinToString(" · ").take(360).ifBlank { null }
         if (smtpState == ChannelState.PENDING || telegramState == ChannelState.PENDING) {
+            telegramRetryAfter?.let { seconds ->
+                delay(seconds.toLong() * 1000)
+                currentCoroutineContext().ensureActive()
+            }
             dao.updateJob(
                 job.id,
                 JobState.RETRYING.name,
