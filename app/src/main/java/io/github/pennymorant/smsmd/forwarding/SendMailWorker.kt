@@ -14,7 +14,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
@@ -30,7 +29,7 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         val container = (applicationContext as SmsMdApplication).container
         val dao = container.database.forwardDao()
         val job = dao.getJob(jobId) ?: return Result.success()
-        val attempt = runAttemptCount + 1
+        val attempt = nextDeliveryAttempt(job.attemptCount, runAttemptCount)
         Log.i(TAG, "Starting queued delivery attempt $attempt")
         suspend fun failQueuedMessage(message: String): Result {
             withContext(NonCancellable) {
@@ -59,7 +58,6 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
             return failQueuedMessage("Stored delivery configuration could not be decrypted")
         }
         val errors = linkedSetOf<String>()
-        job.lastError?.takeIf(String::isNotBlank)?.let(errors::add)
         var smtpState = enumValueOrDefault(job.smtpState, ChannelState.PENDING)
         var telegramState = enumValueOrDefault(job.telegramState, ChannelState.SKIPPED)
         var telegramRetryAfter: Int? = null
@@ -109,13 +107,17 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
                     )
                 }
                 val settings = if (telegramSnapshot == null) container.settings.settings.first() else null
-                container.telegramClient.sendSms(
-                    telegramSnapshot?.token ?: container.secrets.telegramToken(),
-                    telegramSnapshot?.chatId ?: requireNotNull(settings).telegramChatId,
-                    sender,
-                    body,
-                    job.receivedAt,
-                )
+                val token = telegramSnapshot?.token ?: container.secrets.telegramToken()
+                val chatId = telegramSnapshot?.chatId ?: requireNotNull(settings).telegramChatId
+                val parts = TelegramClient.smsParts(sender, body, job.receivedAt)
+                val startIndex = telegramPartStartIndex(job.telegramPartIndex, parts.size)
+                for (index in startIndex until parts.size) {
+                    container.telegramClient.sendSmsPart(token, chatId, parts[index])
+                    withContext(NonCancellable) {
+                        dao.updateTelegramPartIndex(job.id, index + 1)
+                    }
+                    currentCoroutineContext().ensureActive()
+                }
                 telegramState = ChannelState.SENT
             } catch (error: CancellationException) {
                 throw error
@@ -137,16 +139,21 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
 
         val errorSummary = errors.joinToString(" · ").take(360).ifBlank { null }
         if (smtpState == ChannelState.PENDING || telegramState == ChannelState.PENDING) {
-            telegramRetryAfter?.let { seconds ->
-                delay(seconds.toLong() * 1000)
-                currentCoroutineContext().ensureActive()
-            }
             dao.updateJob(
                 job.id,
                 JobState.RETRYING.name,
                 attempt,
                 errorSummary,
             )
+            telegramRetryDelaySeconds(telegramRetryAfter)?.let { delaySeconds ->
+                return runCatching {
+                    container.forwardRepository.enqueueTelegramRetry(job.id, delaySeconds)
+                    Result.success()
+                }.getOrElse { error ->
+                    Log.w(TAG, "Could not schedule Telegram retry-after delay", error)
+                    Result.retry()
+                }
+            }
             return Result.retry()
         }
 
@@ -196,3 +203,12 @@ class SendMailWorker(context: Context, params: WorkerParameters) : CoroutineWork
         private const val MAX_ATTEMPTS = 8
     }
 }
+
+internal fun nextDeliveryAttempt(storedAttemptCount: Int, workManagerRunAttemptCount: Int): Int =
+    maxOf(storedAttemptCount + 1, workManagerRunAttemptCount + 1)
+
+internal fun telegramRetryDelaySeconds(retryAfterSeconds: Int?): Long? =
+    retryAfterSeconds?.takeIf { it > 0 }?.toLong()
+
+internal fun telegramPartStartIndex(savedPartIndex: Int, partCount: Int): Int =
+    savedPartIndex.takeIf { it in 0..partCount } ?: 0

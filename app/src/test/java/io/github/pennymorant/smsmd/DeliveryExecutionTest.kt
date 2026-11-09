@@ -2,6 +2,9 @@ package io.github.pennymorant.smsmd
 
 import io.github.pennymorant.smsmd.forwarding.DeliveryExecutionGate
 import io.github.pennymorant.smsmd.forwarding.isPermanentSmtpFailure
+import io.github.pennymorant.smsmd.forwarding.nextDeliveryAttempt
+import io.github.pennymorant.smsmd.forwarding.telegramPartStartIndex
+import io.github.pennymorant.smsmd.forwarding.telegramRetryDelaySeconds
 import jakarta.mail.AuthenticationFailedException
 import jakarta.mail.internet.InternetAddress
 import java.io.IOException
@@ -82,5 +85,29 @@ class DeliveryExecutionTest {
         }
 
         assertEquals(1, maximum.get())
+    }
+
+    @Test
+    fun delayedTelegramRetriesKeepPersistentAttemptCount() {
+        assertEquals(1, nextDeliveryAttempt(storedAttemptCount = 0, workManagerRunAttemptCount = 0))
+        assertEquals(4, nextDeliveryAttempt(storedAttemptCount = 3, workManagerRunAttemptCount = 0))
+        assertEquals(5, nextDeliveryAttempt(storedAttemptCount = 1, workManagerRunAttemptCount = 4))
+    }
+
+    @Test
+    fun telegramRetryAfterUsesOnlyPositiveServerDelay() {
+        assertEquals(45L, telegramRetryDelaySeconds(45))
+        assertEquals(null, telegramRetryDelaySeconds(0))
+        assertEquals(null, telegramRetryDelaySeconds(-1))
+        assertEquals(null, telegramRetryDelaySeconds(null))
+    }
+
+    @Test
+    fun telegramMultipartRetryResumesAtSavedPart() {
+        assertEquals(0, telegramPartStartIndex(savedPartIndex = 0, partCount = 3))
+        assertEquals(2, telegramPartStartIndex(savedPartIndex = 2, partCount = 3))
+        assertEquals(3, telegramPartStartIndex(savedPartIndex = 3, partCount = 3))
+        assertEquals(0, telegramPartStartIndex(savedPartIndex = 4, partCount = 3))
+        assertEquals(0, telegramPartStartIndex(savedPartIndex = -1, partCount = 3))
     }
 }

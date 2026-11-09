@@ -20,7 +20,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 class ForwardingService : Service() {
@@ -32,7 +31,7 @@ class ForwardingService : Service() {
         ServiceCompat.startForeground(
             this,
             NOTIFICATION_ID,
-            buildNotification(0),
+            buildNotification(this, 0),
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
             } else {
@@ -42,13 +41,7 @@ class ForwardingService : Service() {
         refreshForwardedCount()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_UPDATE_COUNT) {
-            val count = intent.getLongExtra(EXTRA_FORWARDED_COUNT, -1L)
-            if (count >= 0) showNotification(count) else refreshForwardedCount()
-        }
-        return START_STICKY
-    }
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -73,45 +66,45 @@ class ForwardingService : Service() {
     private fun refreshForwardedCount() {
         serviceScope.launch {
             val application = applicationContext as SmsMdApplication
-            showNotification(application.container.settings.forwardedCount.first())
+            val container = application.container
+            val count = container.database.forwardDao().initializeForwardedCount()
+            showNotification(count)
         }
     }
 
     private fun showNotification(count: Long) {
         getSystemService(NotificationManager::class.java).notify(
             NOTIFICATION_ID,
-            buildNotification(count),
+            buildNotification(this, count),
         )
     }
-
-    private fun buildNotification(count: Long) = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.drawable.ic_notification)
-        .setContentTitle("SMS forwarding is active")
-        .setContentText("Waiting for incoming messages")
-        .setSubText(forwardedCountLabel(count))
-        .setContentIntent(
-            PendingIntent.getActivity(
-                this,
-                0,
-                Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            ),
-        )
-        .setCategory(NotificationCompat.CATEGORY_SERVICE)
-        .setPriority(NotificationCompat.PRIORITY_LOW)
-        .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-        .setOnlyAlertOnce(true)
-        .setOngoing(true)
-        .build()
 
     companion object {
         private const val TAG = "ForwardingService"
         private const val CHANNEL_ID = "forwarding_active"
         private const val NOTIFICATION_ID = 1001
-        private const val ACTION_UPDATE_COUNT = "io.github.pennymorant.smsmd.action.UPDATE_COUNT"
-        private const val EXTRA_FORWARDED_COUNT = "forwarded_count"
-
         internal fun forwardedCountLabel(count: Long): String = "$count forwarded"
+
+        private fun buildNotification(context: Context, count: Long) =
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_notification)
+                .setContentTitle("SMS forwarding is active")
+                .setContentText("Waiting for incoming messages")
+                .setSubText(forwardedCountLabel(count))
+                .setContentIntent(
+                    PendingIntent.getActivity(
+                        context,
+                        0,
+                        Intent(context, MainActivity::class.java),
+                        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                    ),
+                )
+                .setCategory(NotificationCompat.CATEGORY_SERVICE)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+                .setOnlyAlertOnce(true)
+                .setOngoing(true)
+                .build()
 
         fun update(context: Context, enabled: Boolean) {
             if (!enabled) {
@@ -129,16 +122,10 @@ class ForwardingService : Service() {
         }
 
         fun updateCount(context: Context, count: Long) {
-            runCatching {
-                context.startService(
-                    Intent(context, ForwardingService::class.java).apply {
-                        action = ACTION_UPDATE_COUNT
-                        putExtra(EXTRA_FORWARDED_COUNT, count)
-                    },
-                )
-            }.onFailure { error ->
-                Log.e(TAG, "The forwarding count notification could not be updated", error)
-            }
+            context.getSystemService(NotificationManager::class.java).notify(
+                NOTIFICATION_ID,
+                buildNotification(context, count),
+            )
         }
     }
 }

@@ -21,9 +21,10 @@ class TelegramApiException(
 
 class TelegramClient {
     fun sendSms(token: String, chatId: String, sender: String, body: String, receivedAt: Long) {
-        val message = smsText(sender, body, receivedAt)
-        splitMessage(message).forEach { part -> sendMessage(token, chatId, part) }
+        smsParts(sender, body, receivedAt).forEach { part -> sendSmsPart(token, chatId, part) }
     }
+
+    fun sendSmsPart(token: String, chatId: String, text: String) = sendMessage(token, chatId, text)
 
     fun sendTest(token: String, chatId: String) {
         request(token, "getMe", JSONObject())
@@ -113,6 +114,9 @@ class TelegramClient {
                 .format(Date(receivedAt))
             return "New SMS\n\nFrom: $sender\nReceived: $received\n\n$body"
         }
+
+        internal fun smsParts(sender: String, body: String, receivedAt: Long): List<String> =
+            splitMessage(smsText(sender, body, receivedAt))
 
         internal fun splitMessage(message: String): List<String> {
             if (message.codePointCount(0, message.length) <= MAX_MESSAGE_CODE_POINTS) return listOf(message)

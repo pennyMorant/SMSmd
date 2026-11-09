@@ -5,7 +5,6 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
-import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -16,10 +15,6 @@ import kotlinx.coroutines.flow.map
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
 class SettingsRepository(private val context: Context) {
-    val forwardedCount: Flow<Long> = context.settingsDataStore.data.map { values ->
-        values[Keys.forwardedCount] ?: 0L
-    }
-
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { values ->
         AppSettings(
             forwardingEnabled = values[Keys.enabled] ?: false,
@@ -100,15 +95,6 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { it[Keys.themeMode] = themeMode.name }
     }
 
-    suspend fun incrementForwardedCount(): Long {
-        var updatedCount = 0L
-        context.settingsDataStore.edit { values ->
-            updatedCount = (values[Keys.forwardedCount] ?: 0L) + 1L
-            values[Keys.forwardedCount] = updatedCount
-        }
-        return updatedCount
-    }
-
     suspend fun saveTelegram(chatId: String, verified: Boolean) {
         context.settingsDataStore.edit {
             it[Keys.telegramChatId] = chatId.trim()
@@ -168,7 +154,6 @@ class SettingsRepository(private val context: Context) {
         val enabled = booleanPreferencesKey("forwarding_enabled")
         val failureNotifications = booleanPreferencesKey("failure_notifications")
         val themeMode = stringPreferencesKey("theme_mode")
-        val forwardedCount = longPreferencesKey("forwarded_count")
         val activeProfileId = stringPreferencesKey("active_profile_id")
         val profileIds = stringSetPreferencesKey("profile_ids")
         val profilesInitialized = booleanPreferencesKey("profiles_initialized")

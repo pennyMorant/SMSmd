@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -76,7 +77,7 @@ class MainViewModel(private val container: AppContainer) : ViewModel() {
                 .mapTo(mutableSetOf()) { it.id },
             telegramCredentialReady = container.secrets.hasTelegramToken(),
         )
-    }
+    }.flowOn(Dispatchers.IO)
 
     val uiState: StateFlow<MainUiState> = combine(baseUiState, telegramTestStatus) { state, telegramTest ->
         state.copy(telegramTestStatus = telegramTest)

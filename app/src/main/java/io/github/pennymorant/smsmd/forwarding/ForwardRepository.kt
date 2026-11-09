@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
@@ -90,15 +91,37 @@ class ForwardRepository(
     }
 
     fun enqueue(jobId: Long) {
-        val request = OneTimeWorkRequestBuilder<SendMailWorker>()
+        workManager.enqueueUniqueWork(
+            workName(jobId),
+            ExistingWorkPolicy.KEEP,
+            deliveryRequest(jobId),
+        )
+    }
+
+    fun enqueueTelegramRetry(jobId: Long, delaySeconds: Long) {
+        val request = deliveryRequest(jobId, delaySeconds)
+        workManager.enqueueUniqueWork(
+            workName(jobId),
+            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            request,
+        ).result.get(ENQUEUE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+    }
+
+    private fun deliveryRequest(jobId: Long, delaySeconds: Long = 0): OneTimeWorkRequest {
+        val builder = OneTimeWorkRequestBuilder<SendMailWorker>()
             .setInputData(workDataOf(SendMailWorker.JOB_ID to jobId))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
             .addTag("sms-mail-send")
-            .build()
-        workManager.enqueueUniqueWork("send-sms-$jobId", ExistingWorkPolicy.KEEP, request)
+        if (delaySeconds > 0) {
+            builder.setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+        } else {
+            builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        }
+        return builder.build()
     }
+
+    private fun workName(jobId: Long): String = "send-sms-$jobId"
 
     suspend fun recoverPendingJobs() {
         dao.pendingJobs().forEach { enqueue(it.id) }
@@ -112,7 +135,7 @@ class ForwardRepository(
         channelSummary: String,
         error: String?,
     ) {
-        dao.replaceWithLog(
+        val forwardedCount = dao.completeJob(
             DeliveryLogEntity(
                 jobId = job.id,
                 maskedSender = SmtpClient.maskSender(sender),
@@ -122,12 +145,12 @@ class ForwardRepository(
                 errorSummary = error,
                 channelSummary = channelSummary,
             ),
+            job.id,
+            result == JobState.SENT.name,
         )
-        dao.deleteJob(job.id)
-        if (result == JobState.SENT.name) {
-            runCatching { settingsRepository.incrementForwardedCount() }
-                .onSuccess { count -> ForwardingService.updateCount(applicationContext, count) }
-                .onFailure { error -> Log.w(TAG, "Could not update the forwarded count", error) }
+        if (result == JobState.SENT.name && settingsRepository.settings.first().forwardingEnabled) {
+            runCatching { ForwardingService.updateCount(applicationContext, forwardedCount) }
+                .onFailure { error -> Log.w(TAG, "Could not update the forwarded count notification", error) }
         }
     }
 
@@ -151,5 +174,6 @@ class ForwardRepository(
 
     private companion object {
         const val TAG = "ForwardRepository"
+        const val ENQUEUE_TIMEOUT_SECONDS = 8L
     }
 }

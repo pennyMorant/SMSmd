@@ -83,6 +83,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -247,6 +248,23 @@ private sealed interface ConfigurationSheet {
     data object Telegram : ConfigurationSheet
 }
 
+private val ConfigurationSheetSaver = Saver<ConfigurationSheet?, String>(
+    save = { sheet ->
+        when (sheet) {
+            ConfigurationSheet.TypePicker -> "type-picker"
+            ConfigurationSheet.Telegram -> "telegram"
+            is ConfigurationSheet.Smtp, null -> null
+        }
+    },
+    restore = { saved ->
+        when (saved) {
+            "type-picker" -> ConfigurationSheet.TypePicker
+            "telegram" -> ConfigurationSheet.Telegram
+            else -> null
+        }
+    },
+)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SmsMdApp(
@@ -265,7 +283,9 @@ private fun SmsMdApp(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     var selectedTab by rememberSaveable { mutableStateOf(AppTab.HOME) }
     var showSmsDisclosure by rememberSaveable { mutableStateOf(false) }
-    var configurationSheet by remember { mutableStateOf<ConfigurationSheet?>(null) }
+    var configurationSheet by rememberSaveable(stateSaver = ConfigurationSheetSaver) {
+        mutableStateOf<ConfigurationSheet?>(null)
+    }
     val configurationSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()

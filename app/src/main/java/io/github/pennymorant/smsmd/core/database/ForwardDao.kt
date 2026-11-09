@@ -21,6 +21,9 @@ interface ForwardDao {
     @Query("UPDATE forward_jobs SET smtpState = :smtpState, telegramState = :telegramState WHERE id = :id")
     suspend fun updateChannelStates(id: Long, smtpState: String, telegramState: String)
 
+    @Query("UPDATE forward_jobs SET telegramPartIndex = :partIndex WHERE id = :id")
+    suspend fun updateTelegramPartIndex(id: Long, partIndex: Int)
+
     @Query("DELETE FROM forward_jobs WHERE id = :id")
     suspend fun deleteJob(id: Long)
 
@@ -39,10 +42,36 @@ interface ForwardDao {
     @Query("DELETE FROM delivery_logs")
     suspend fun clearLogs()
 
+    @Query("INSERT OR IGNORE INTO delivery_stats (id, forwardedCount) VALUES (1, 0)")
+    suspend fun ensureDeliveryStats()
+
+    @Query("UPDATE delivery_stats SET forwardedCount = forwardedCount + 1 WHERE id = 1")
+    suspend fun incrementForwardedCount()
+
+    @Query("SELECT COALESCE((SELECT forwardedCount FROM delivery_stats WHERE id = 1), 0)")
+    suspend fun forwardedCount(): Long
+
+    @Query("SELECT COALESCE((SELECT forwardedCount FROM delivery_stats WHERE id = 1), 0)")
+    fun observeForwardedCount(): Flow<Long>
+
     @Transaction
-    suspend fun replaceWithLog(log: DeliveryLogEntity) {
+    suspend fun initializeForwardedCount(): Long {
+        ensureDeliveryStats()
+        return forwardedCount()
+    }
+
+    @Transaction
+    suspend fun completeJob(
+        log: DeliveryLogEntity,
+        jobId: Long,
+        countAsForwarded: Boolean,
+    ): Long {
+        ensureDeliveryStats()
         clearLogs()
         insertLog(log)
+        deleteJob(jobId)
+        if (countAsForwarded) incrementForwardedCount()
+        return forwardedCount()
     }
 
     @Query("DELETE FROM delivery_logs WHERE id NOT IN (SELECT id FROM delivery_logs ORDER BY completedAt DESC LIMIT 1)")

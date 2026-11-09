@@ -26,6 +26,7 @@ data class ForwardJobEntity(
     val lastError: String? = null,
     @ColumnInfo(defaultValue = "'PENDING'") val smtpState: String = ChannelState.PENDING.name,
     @ColumnInfo(defaultValue = "'SKIPPED'") val telegramState: String = ChannelState.SKIPPED.name,
+    @ColumnInfo(defaultValue = "0") val telegramPartIndex: Int = 0,
     val encryptedDeliveryConfig: String? = null,
 )
 
@@ -40,4 +41,10 @@ data class DeliveryLogEntity(
     val attemptCount: Int,
     val errorSummary: String? = null,
     @ColumnInfo(defaultValue = "'Email sent'") val channelSummary: String = "Email sent",
+)
+
+@Entity(tableName = "delivery_stats")
+data class DeliveryStatsEntity(
+    @PrimaryKey val id: Int = 1,
+    val forwardedCount: Long = 0,
 )
