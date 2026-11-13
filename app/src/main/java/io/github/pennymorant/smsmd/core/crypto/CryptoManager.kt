@@ -17,7 +17,7 @@ class CryptoManager {
         val cipher = Cipher.getInstance(TRANSFORMATION)
         cipher.init(Cipher.ENCRYPT_MODE, getOrCreateKey())
         val iv = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
-        val payload = Base64.encodeToString(cipher.doFinal(plainText.toByteArray()), Base64.NO_WRAP)
+        val payload = Base64.encodeToString(cipher.doFinal(plainText.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP)
         return "1:$iv:$payload"
     }
 

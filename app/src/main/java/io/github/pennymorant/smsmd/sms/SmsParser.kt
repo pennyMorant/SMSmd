@@ -2,6 +2,7 @@ package io.github.pennymorant.smsmd.sms
 
 import android.content.Intent
 import android.provider.Telephony
+import android.telephony.SubscriptionManager
 
 data class IncomingSms(
     val sender: String,
@@ -23,7 +24,10 @@ object SmsParser {
             sender = sender,
             body = body,
             receivedAt = messages.minOfOrNull { it.timestampMillis } ?: System.currentTimeMillis(),
-            subscriptionId = intent.getIntExtra("subscription", -1),
+            subscriptionId = intent.getIntExtra(
+                SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX,
+                intent.getIntExtra("subscription", -1),
+            ),
         )
     }
 }
